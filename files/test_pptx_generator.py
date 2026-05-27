@@ -313,3 +313,125 @@ class TestParseSpec:
         data = {"title": "Test"}  # нет style и slides
         with pytest.raises(ValueError, match="схеме"):
             parse_spec(json.dumps(data))
+
+
+# --------------------------------------------------------------------------- #
+# Тесты программной защиты от рекомендаций
+# --------------------------------------------------------------------------- #
+
+class TestRecommendationSanitizer:
+    """
+    Проверяет, что схема программно фильтрует рекомендации даже если
+    LLM проигнорировал запрет в промпте.
+    """
+
+    def _base_spec(self, slides):
+        return PresentationSpec(
+            title="Test",
+            style=_make_style(),
+            slides=slides,
+        )
+
+    def test_renames_recommendation_title(self):
+        from pptx_generator import BulletsSlide
+        spec = self._base_spec([
+            TitleSlide(title="Start"),
+            BulletsSlide(title="Рекомендации", bullets=["Факт 1", "Факт 2"]),
+        ])
+        assert spec.slides[1].title == "Итоги анализа"
+
+    def test_renames_action_plan_title(self):
+        from pptx_generator import BulletsSlide
+        spec = self._base_spec([
+            TitleSlide(title="Start"),
+            BulletsSlide(title="План действий на квартал", bullets=["Факт"]),
+        ])
+        assert spec.slides[1].title == "Итоги анализа"
+
+    def test_keeps_neutral_title(self):
+        from pptx_generator import BulletsSlide
+        original = "Главные наблюдения"
+        spec = self._base_spec([
+            TitleSlide(title="Start"),
+            BulletsSlide(title=original, bullets=["Факт"]),
+        ])
+        assert spec.slides[1].title == original
+
+    def test_filters_imperative_bullets(self):
+        from pptx_generator import BulletsSlide
+        spec = self._base_spec([
+            TitleSlide(title="Start"),
+            BulletsSlide(
+                title="Итоги",
+                bullets=[
+                    "Выручка выросла на 24%",                # факт — оставить
+                    "Следует внедрить новую систему SLA",    # императив — убрать
+                    "Москва генерирует 47% жалоб",           # факт — оставить
+                    "Необходимо провести обучение",          # императив — убрать
+                ],
+            ),
+        ])
+        bullets = spec.slides[1].bullets
+        assert "выросла на 24%" in bullets[0]
+        assert "47% жалоб" in bullets[1]
+        assert len(bullets) == 2
+
+    def test_filters_in_two_column(self):
+        spec = self._base_spec([
+            TitleSlide(title="Start"),
+            TwoColumnSlide(
+                title="Сравнение",
+                left_heading="Левое",
+                left_bullets=["Факт левый", "Необходимо что-то сделать"],
+                right_heading="Правое",
+                right_bullets=["Следует переделать", "Факт правый"],
+            ),
+        ])
+        s = spec.slides[1]
+        assert len(s.left_bullets) == 1 and "Факт левый" in s.left_bullets[0]
+        assert len(s.right_bullets) == 1 and "Факт правый" in s.right_bullets[0]
+
+    def test_placeholder_when_all_filtered(self):
+        """Если все буллеты — императивы, остаётся плейсхолдер."""
+        from pptx_generator import BulletsSlide
+        spec = self._base_spec([
+            TitleSlide(title="Start"),
+            BulletsSlide(
+                title="Итоги",
+                bullets=["Следует внедрить X", "Необходимо сделать Y"],
+            ),
+        ])
+        bullets = spec.slides[1].bullets
+        assert len(bullets) == 1
+        assert "данных" in bullets[0].lower()  # placeholder упоминает «данные»
+
+
+# --------------------------------------------------------------------------- #
+# Тесты лимитов длины
+# --------------------------------------------------------------------------- #
+
+class TestLengthLimits:
+    """Защита от переполнения вёрстки за счёт длинных текстов."""
+
+    def test_bullet_truncated(self):
+        from pptx_generator import BulletsSlide
+        slide = BulletsSlide(
+            title="Test",
+            bullets=["x" * 300],  # очень длинный
+        )
+        assert len(slide.bullets[0]) <= 140
+
+    def test_category_truncated(self):
+        from pptx_generator import ChartData, ChartSeries, ChartType
+        cd = ChartData(
+            chart_type=ChartType.BAR,
+            title="Test",
+            categories=["a" * 100, "b"],
+            series=[ChartSeries(name="s", values=[1, 2])],
+        )
+        assert len(cd.categories[0]) <= 25
+
+    def test_title_max_length_enforced(self):
+        # Заголовок > 80 симв должен вызвать ValidationError
+        with pytest.raises(ValueError):
+            TitleSlide(title="x" * 200)
