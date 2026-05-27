@@ -7,8 +7,8 @@ Tool принимает путь к xlsx и текстовый промпт по
 Архитектура:
 1. ExcelReader читает xlsx → DataContext
 2. Промпт + DataContext отправляются в GigaChat
-3. Ответ парсится в PresentationSpec (с валидацией и ретраями)
-4. PresentationBuilder собирает .pptx
+3. Ответ парсится в DigestSpec (с валидацией и ретраями)
+4. DigestBuilder собирает .pptx
 
 Ошибки на каждом этапе оборачиваются в осмысленные сообщения —
 LangChain-агент должен видеть, что именно пошло не так, чтобы
@@ -28,14 +28,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, ValidationError
 
-from .builder import PresentationBuilder
+from .builder import DigestBuilder
 from .excel_reader import ExcelReader
 from .prompts import (
     analysis_user_prompt,
     data_only_user_prompt,
     system_prompt,
 )
-from .schemas import PresentationSpec
+from .schemas import DigestSpec
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Схема входных параметров для tool
 # --------------------------------------------------------------------------- #
 
-class GeneratePresentationInput(BaseModel):
+class GenerateDigestInput(BaseModel):
     """Входные параметры инструмента."""
     xlsx_path: str = Field(
         description=(
@@ -96,7 +96,7 @@ def extract_json(raw: str) -> str:
     return raw
 
 
-def parse_spec(raw_response: str) -> PresentationSpec:
+def parse_spec(raw_response: str) -> DigestSpec:
     """Парсит и валидирует ответ LLM."""
     json_str = extract_json(raw_response)
 
@@ -106,10 +106,10 @@ def parse_spec(raw_response: str) -> PresentationSpec:
         raise ValueError(f"LLM вернул невалидный JSON: {e}. Ответ:\n{raw_response[:500]}")
 
     try:
-        return PresentationSpec.model_validate(data)
+        return DigestSpec.model_validate(data)
     except ValidationError as e:
         raise ValueError(
-            f"LLM вернул JSON, не соответствующий схеме PresentationSpec.\n"
+            f"LLM вернул JSON, не соответствующий схеме DigestSpec.\n"
             f"Ошибки валидации:\n{e}"
         )
 
@@ -118,37 +118,39 @@ def parse_spec(raw_response: str) -> PresentationSpec:
 # Сам LangChain Tool
 # --------------------------------------------------------------------------- #
 
-class GeneratePresentationTool(BaseTool):
+class GenerateDigestTool(BaseTool):
     """
-    LangChain-инструмент для генерации .pptx из xlsx + промпта.
+    LangChain-инструмент для генерации дайджеста .pptx из xlsx + промпта.
 
     Использование:
         from langchain_gigachat import GigaChat
-        from pptx_generator import GeneratePresentationTool
+        from pptx_generator import GenerateDigestTool
 
         llm = GigaChat(credentials="...", model="GigaChat-Pro")
-        tool = GeneratePresentationTool(llm=llm)
+        tool = GenerateDigestTool(llm=llm)
 
         # Через invoke:
         result = tool.invoke({
             "xlsx_path": "/path/to/data.xlsx",
-            "style_prompt": "Минималистичная тёмная презентация",
+            "style_prompt": "Корпоративный дайджест, пастельные цвета",
         })
 
         # Или дать агенту:
         agent = create_react_agent(llm, [tool], ...)
     """
 
-    name: str = "generate_pptx_presentation"
+    name: str = "generate_digest_pptx"
     description: str = (
-        "Создаёт профессиональную PowerPoint-презентацию (.pptx) на основе xlsx-файла "
-        "и текстового описания желаемого стиля. Excel должен содержать листы 'Сырье' "
-        "(сырые табличные данные) и 'Суммаризация' (текст с описанием проблем). "
-        "Инструмент сам анализирует данные, подбирает структуру слайдов, генерирует "
-        "нативные графики (bar, line, pie, scatter) и оформляет в соответствии с "
-        "промптом пользователя. Возвращает путь к сгенерированному .pptx."
+        "Создаёт корпоративный аналитический дайджест в PowerPoint (.pptx) "
+        "на основе xlsx-файла и текстового описания стиля. Excel должен содержать "
+        "листы 'Сырье' (табличные данные с цитатами/упоминаниями) и 'Суммаризация' "
+        "(текст про темы). Инструмент структурирует данные в формат дайджеста: "
+        "обложка с общими KPI и pill-тегами источников + детальные слайды по темам "
+        "с цитатами сотрудников, бейджами 'new', и KPI по каждой теме. "
+        "Стилизация (палитра, шрифты) адаптируется под промпт пользователя. "
+        "Возвращает путь к сгенерированному .pptx."
     )
-    args_schema: Type[BaseModel] = GeneratePresentationInput
+    args_schema: Type[BaseModel] = GenerateDigestInput
 
     llm: BaseChatModel = Field(description="LLM (обычно GigaChat) для генерации структуры")
     max_retries: int = Field(default=3, description="Сколько раз повторить при невалидном JSON")
@@ -203,13 +205,13 @@ class GeneratePresentationTool(BaseTool):
 
         # 4. Собираем .pptx
         logger.info("Собираю .pptx: %d слайдов → %s", len(spec.slides), output_path)
-        result_path = PresentationBuilder(spec).build(output_path)
+        result_path = DigestBuilder(spec).build(output_path)
 
         return str(result_path)
 
     def _call_llm_with_retries(
         self, data_context, style_prompt: str
-    ) -> PresentationSpec:
+    ) -> DigestSpec:
         """
         Дёргает LLM, ретраит при невалидном JSON, добавляя ошибку в контекст.
 
@@ -267,3 +269,8 @@ class GeneratePresentationTool(BaseTool):
         # Простая async-обёртка через invoke; для production стоит сделать
         # настоящую async через self.llm.ainvoke и aiofiles для Excel
         return self._run(*args, **kwargs)
+
+
+# Backward compatibility aliases
+GeneratePresentationTool = GenerateDigestTool
+GeneratePresentationInput = GenerateDigestInput

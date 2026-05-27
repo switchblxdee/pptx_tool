@@ -1,66 +1,43 @@
 """
-Pydantic-схемы для структурированного вывода от LLM.
+Pydantic-схемы для дайджеста.
 
-Эти модели — контракт между GigaChat и генератором презентаций.
-LLM возвращает JSON, который валидируется в PresentationSpec,
-а дальше PresentationBuilder детерминированно строит .pptx.
+Модель данных полностью переориентирована под формат «корпоративный
+аналитический дайджест» (как на референсе «Голос IT»).
 
-Такое разделение даёт:
-- предсказуемость (LLM не управляет рендерингом напрямую);
-- надёжность (валидация ловит галлюцинации до сборки);
-- тестируемость (генератор тестируется без LLM).
+Структура:
+    DigestSpec
+    ├── meta (период, номер выпуска, дата)
+    ├── style (палитра, шрифты)
+    ├── cover (обложка с KPI и тегами источников)
+    └── topics: [TopicSlide]  (детальные слайды по темам)
 """
 from __future__ import annotations
 
-from enum import Enum
-from typing import List, Literal, Optional, Union
+from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
-
-
-# --------------------------------------------------------------------------- #
-# Базовые типы
-# --------------------------------------------------------------------------- #
-
-class ChartType(str, Enum):
-    """Поддерживаемые типы нативных PPTX-графиков."""
-    BAR = "bar"           # горизонтальные столбцы (категории слева)
-    COLUMN = "column"     # вертикальные столбцы (классический bar chart)
-    LINE = "line"         # тренды во времени
-    PIE = "pie"           # доли целого
-    SCATTER = "scatter"   # корреляции между двумя величинами
-
-
-class SlideLayout(str, Enum):
-    """Лэйауты слайдов. Каждый имеет свой рендер в builder.py."""
-    TITLE = "title"                       # обложка
-    SECTION_HEADER = "section_header"     # разделитель раздела
-    BULLETS = "bullets"                   # заголовок + буллеты
-    TWO_COLUMN = "two_column"             # текст слева, текст справа
-    CHART = "chart"                       # заголовок + один график на весь слайд
-    CHART_WITH_TEXT = "chart_with_text"   # график + аналитика рядом
-    KPI = "kpi"                           # 3-4 крупных числа с подписями
-    QUOTE = "quote"                       # цитата / ключевой инсайт
-    CLOSING = "closing"                   # финальный слайд
+from pydantic import BaseModel, Field, field_validator
 
 
 # --------------------------------------------------------------------------- #
-# Стиль (адаптируется под промпт пользователя)
+# Стиль
 # --------------------------------------------------------------------------- #
 
 class ColorPalette(BaseModel):
     """
-    Палитра из 6 цветов в hex (без #).
+    Палитра дайджеста.
 
-    LLM подбирает её под тему презентации.
-    Палитра валидируется на корректность hex.
+    На референсе видны: бирюзово-персиковый градиент (gradient_start/end),
+    мягкие пастельные карточки тем (card_bg), белые KPI-карточки (kpi_bg),
+    акцентный оранжевый для бейджа `new` (badge).
     """
-    primary: str = Field(description="Основной цвет — фоны заголовков, акценты")
-    secondary: str = Field(description="Вторичный — поддерживающий цвет")
-    accent: str = Field(description="Контрастный акцент для важных элементов")
-    background: str = Field(description="Фон контентных слайдов (обычно светлый)")
-    text_dark: str = Field(description="Тёмный текст для светлого фона")
-    text_light: str = Field(description="Светлый текст для тёмного фона")
+    gradient_start: str = Field(description="Левый цвет градиента фона (обычно бирюзовый)")
+    gradient_end: str = Field(description="Правый цвет градиента фона (обычно персиковый)")
+    card_bg: str = Field(description="Фон карточек темы (мягкий пастельный)")
+    kpi_bg: str = Field(description="Фон KPI-карточек (обычно белый)")
+    text_dark: str = Field(description="Основной тёмный текст")
+    text_muted: str = Field(description="Приглушённый текст (метаданные, цитаты)")
+    accent: str = Field(description="Акцентный цвет для заголовков тем и плашек")
+    badge: str = Field(description="Цвет бейджа «new» (обычно оранжевый/коралл)")
 
     @field_validator("*")
     @classmethod
@@ -72,270 +49,214 @@ class ColorPalette(BaseModel):
 
 
 class Typography(BaseModel):
-    """Шрифтовая пара. LLM подбирает под настроение презентации."""
-    heading_font: str = Field(default="Calibri", description="Шрифт заголовков")
-    body_font: str = Field(default="Calibri", description="Шрифт основного текста")
+    heading_font: str = Field(default="Calibri")
+    body_font: str = Field(default="Calibri")
 
 
-class PresentationStyle(BaseModel):
-    """Цельный стилевой контракт презентации."""
+class DigestStyle(BaseModel):
     palette: ColorPalette
     typography: Typography = Field(default_factory=Typography)
-    mood: str = Field(
-        default="professional",
-        description="Настроение: professional, energetic, calm, technical и т.п."
+
+
+# --------------------------------------------------------------------------- #
+# Мета-информация дайджеста (футер)
+# --------------------------------------------------------------------------- #
+
+class DigestMeta(BaseModel):
+    """
+    Метаданные дайджеста — отображаются в шапке cover-слайда
+    и в футере каждого topic-слайда.
+    """
+    issue_date: str = Field(max_length=30, description="Дата выпуска, напр. '28 мая 2026'")
+    period: str = Field(max_length=40, description="Период, напр. '21–27 мая 2026'")
+    issue_number: str = Field(max_length=30, description="Номер выпуска, напр. '№ 1 / еженедельный'")
+    next_issue: Optional[str] = Field(
+        default=None, max_length=40,
+        description="Когда следующий выпуск, напр. '1 июня 2026'"
+    )
+    note: Optional[str] = Field(
+        default="Подготовлен автоматически", max_length=60,
+        description="Финальная пометка в футере"
     )
 
 
 # --------------------------------------------------------------------------- #
-# Контент слайдов (дискриминированные модели)
+# KPI-карточки (используются на cover и на topic-слайдах)
 # --------------------------------------------------------------------------- #
 
-class ChartSeries(BaseModel):
-    """Один ряд данных для графика."""
-    name: str = Field(description="Название серии (легенда)")
-    values: List[float] = Field(description="Значения серии")
-
-    @field_validator("values")
-    @classmethod
-    def non_empty(cls, v: List[float]) -> List[float]:
-        if not v:
-            raise ValueError("Серия не может быть пустой")
-        return v
-
-
-class ChartData(BaseModel):
-    """Данные графика, типонезависимое представление."""
-    chart_type: ChartType
-    title: str = Field(max_length=80, description="Заголовок графика")
-    categories: List[str] = Field(description="Категории (ось X или сектора pie)")
-    series: List[ChartSeries] = Field(description="Один или больше рядов данных")
-    x_axis_title: Optional[str] = Field(default=None, max_length=40)
-    y_axis_title: Optional[str] = Field(default=None, max_length=40)
-
-    @field_validator("categories")
-    @classmethod
-    def limit_category_text(cls, v: List[str]) -> List[str]:
-        # Длинные подписи категорий ломают вёрстку оси X
-        return [str(c)[:25].rstrip() for c in v]
-
-    @model_validator(mode="after")
-    def validate_consistency(self) -> "ChartData":
-        if not self.series:
-            raise ValueError("Нужен хотя бы один ряд данных")
-
-        # Pie принимает только одну серию
-        if self.chart_type == ChartType.PIE and len(self.series) > 1:
-            raise ValueError("Pie chart поддерживает только одну серию данных")
-
-        # Длины серий должны совпадать с категориями (кроме scatter)
-        if self.chart_type != ChartType.SCATTER:
-            n = len(self.categories)
-            for s in self.series:
-                if len(s.values) != n:
-                    raise ValueError(
-                        f"Серия '{s.name}': {len(s.values)} значений, "
-                        f"но категорий {n}. Длины должны совпадать."
-                    )
-        return self
-
-
-class KPIItem(BaseModel):
-    """Крупный показатель для KPI-слайда."""
-    value: str = Field(max_length=10, description="Само число со знаком, напр. '+24%', '1.2M'")
-    label: str = Field(max_length=40, description="Что означает это число (краткое описание)")
-
-
-# --- Дискриминированные слайды ----------------------------------------------
-
-class _BaseSlide(BaseModel):
-    layout: SlideLayout
-    speaker_notes: Optional[str] = Field(
-        default=None, description="Заметки докладчика (не отображаются на слайде)"
+class KPICard(BaseModel):
+    """Одна KPI-карточка."""
+    value: str = Field(max_length=10, description="Число/значение, крупно")
+    label: str = Field(max_length=40, description="Подпись под числом")
+    icon_hint: Optional[str] = Field(
+        default=None, max_length=20,
+        description="Подсказка по иконке: 'signal', 'lens', 'arrow_up', 'info' и т.п."
     )
 
 
-class TitleSlide(_BaseSlide):
-    layout: Literal[SlideLayout.TITLE] = SlideLayout.TITLE
-    title: str = Field(max_length=80)
-    subtitle: Optional[str] = Field(default=None, max_length=140)
+# --------------------------------------------------------------------------- #
+# Cover-слайд (обложка дайджеста)
+# --------------------------------------------------------------------------- #
 
+class CoverSlide(BaseModel):
+    """
+    Обложка дайджеста.
 
-class SectionHeaderSlide(_BaseSlide):
-    layout: Literal[SlideLayout.SECTION_HEADER] = SlideLayout.SECTION_HEADER
-    title: str = Field(max_length=60)
-    description: Optional[str] = Field(default=None, max_length=200)
+    На референсе:
+    - Крупный заголовок («Голос IT»)
+    - Подзаголовок («дайджест для руководства Блока T»)
+    - Описание мелким текстом («Темы, волнующие сотрудников...»)
+    - 4 pill-метки источников
+    - 4 KPI-карточки внизу
+    """
+    title: str = Field(max_length=60, description="Главный заголовок («Голос IT»)")
+    subtitle: str = Field(max_length=120, description="Подзаголовок дайджеста")
+    description: Optional[str] = Field(
+        default=None, max_length=200,
+        description="Описание мелким текстом под подзаголовком"
+    )
+    source_tags: List[str] = Field(
+        min_length=1, max_length=6,
+        description="Источники в виде pill-меток"
+    )
+    kpis: List[KPICard] = Field(
+        min_length=2, max_length=4,
+        description="Ключевые показатели на обложке"
+    )
 
-
-class BulletsSlide(_BaseSlide):
-    layout: Literal[SlideLayout.BULLETS] = SlideLayout.BULLETS
-    title: str = Field(max_length=90)
-    bullets: List[str] = Field(min_length=1, max_length=6)
-
-    @field_validator("bullets")
+    @field_validator("source_tags")
     @classmethod
-    def limit_bullet_length(cls, v: List[str]) -> List[str]:
-        # Каждый буллет не длиннее 140 символов — иначе перенос съест слайд
-        return [b[:140].rstrip() for b in v]
+    def limit_tag_length(cls, v: List[str]) -> List[str]:
+        # Pills сильно растягиваются — короткие тексты обязательны
+        return [t[:50].rstrip() for t in v]
 
 
-class TwoColumnSlide(_BaseSlide):
-    layout: Literal[SlideLayout.TWO_COLUMN] = SlideLayout.TWO_COLUMN
-    title: str = Field(max_length=90)
-    left_heading: str = Field(max_length=40)
-    left_bullets: List[str] = Field(min_length=1, max_length=5)
-    right_heading: str = Field(max_length=40)
-    right_bullets: List[str] = Field(min_length=1, max_length=5)
+# --------------------------------------------------------------------------- #
+# Topic-слайд (детальный слайд по теме)
+# --------------------------------------------------------------------------- #
 
-    @field_validator("left_bullets", "right_bullets")
-    @classmethod
-    def limit_bullet_length(cls, v: List[str]) -> List[str]:
-        return [b[:110].rstrip() for b in v]
+class TopicItem(BaseModel):
+    """
+    Одна тема-проблема внутри topic-слайда.
+
+    На референсе у каждого item:
+    - Номер
+    - Заголовок темы жирным
+    - Цитата сотрудника курсивом
+    - Период справа (или «на анализе у команды»)
+    - Количество упоминаний справа
+    - Опциональный бейдж `new`
+    """
+    title: str = Field(max_length=110, description="Краткое название проблемы")
+    quote: Optional[str] = Field(
+        default=None, max_length=200,
+        description="Прямая цитата сотрудника (курсивом)"
+    )
+    period: str = Field(
+        max_length=30,
+        description="Период, напр. '2Q 2026' или 'на анализе у команды'"
+    )
+    mentions: int = Field(ge=0, le=99999, description="Количество упоминаний")
+    is_new: bool = Field(default=False, description="Показать ли бейдж 'new'")
 
 
-class ChartSlide(_BaseSlide):
-    layout: Literal[SlideLayout.CHART] = SlideLayout.CHART
-    title: str = Field(max_length=90)
-    chart: ChartData
+class TopicSlide(BaseModel):
+    """
+    Детальный слайд по теме/продукту.
 
-
-class ChartWithTextSlide(_BaseSlide):
-    layout: Literal[SlideLayout.CHART_WITH_TEXT] = SlideLayout.CHART_WITH_TEXT
-    title: str = Field(max_length=90)
-    chart: ChartData
-    insights: List[str] = Field(
+    На референсе:
+    - Слева плашка с названием темы («PDLC: GigaCode CLI»)
+    - 4 KPI-карточки в линию: Источники / Сигналов / Активных тем / Новая тема
+    - Список TopicItem (1-3 элемента)
+    - Внизу pill-метки источников этой темы
+    """
+    title: str = Field(max_length=60, description="Название темы/продукта")
+    kpis: List[KPICard] = Field(
+        min_length=2, max_length=4,
+        description="KPI-карточки в линию вверху"
+    )
+    items: List[TopicItem] = Field(
         min_length=1, max_length=4,
-        description="Ключевые выводы из графика (только наблюдения, не рекомендации)"
+        description="Список выявленных тем/проблем"
+    )
+    source_tags: List[str] = Field(
+        default_factory=list, max_length=6,
+        description="Источники этой темы в виде pill-меток (#Ai in Dev Community и т.п.)"
     )
 
-    @field_validator("insights")
+    @field_validator("source_tags")
     @classmethod
-    def limit_insight_length(cls, v: List[str]) -> List[str]:
-        return [i[:130].rstrip() for i in v]
-
-
-class KPISlide(_BaseSlide):
-    layout: Literal[SlideLayout.KPI] = SlideLayout.KPI
-    title: str = Field(max_length=90)
-    kpis: List[KPIItem] = Field(min_length=2, max_length=4)
-
-
-class QuoteSlide(_BaseSlide):
-    layout: Literal[SlideLayout.QUOTE] = SlideLayout.QUOTE
-    quote: str = Field(max_length=220)
-    attribution: Optional[str] = Field(default=None, max_length=80)
-
-
-class ClosingSlide(_BaseSlide):
-    layout: Literal[SlideLayout.CLOSING] = SlideLayout.CLOSING
-    title: str = Field(default="Спасибо за внимание", max_length=80)
-    subtitle: Optional[str] = Field(default=None, max_length=140)
-
-
-Slide = Union[
-    TitleSlide,
-    SectionHeaderSlide,
-    BulletsSlide,
-    TwoColumnSlide,
-    ChartSlide,
-    ChartWithTextSlide,
-    KPISlide,
-    QuoteSlide,
-    ClosingSlide,
-]
+    def limit_tag_length(cls, v: List[str]) -> List[str]:
+        return [t[:50].rstrip() for t in v]
 
 
 # --------------------------------------------------------------------------- #
 # Корневая спецификация
 # --------------------------------------------------------------------------- #
 
-class PresentationSpec(BaseModel):
+class DigestSpec(BaseModel):
     """
-    Полная спецификация презентации.
+    Полная спецификация дайджеста.
 
-    Это то, что возвращает LLM и принимает на вход PresentationBuilder.
+    Это то, что возвращает LLM и принимает на вход DigestBuilder.
     """
-    title: str = Field(max_length=100, description="Название презентации")
-    author: Optional[str] = Field(default=None, max_length=60)
-    style: PresentationStyle
-    slides: List[Slide] = Field(min_length=1, description="Слайды по порядку")
+    style: DigestStyle
+    meta: DigestMeta
+    cover: CoverSlide
+    topics: List[TopicSlide] = Field(
+        min_length=1, max_length=20,
+        description="Темы для детальных слайдов"
+    )
 
-    @field_validator("slides")
+    @field_validator("topics")
     @classmethod
-    def sanitize_recommendations(cls, slides: List[Slide]) -> List[Slide]:
+    def sanitize_recommendations(cls, topics: List[TopicSlide]) -> List[TopicSlide]:
         """
-        Программная защита: если LLM всё-таки прислал «рекомендации»,
-        мы их обезвреживаем.
+        Программная защита от рекомендаций.
 
-        Стратегия:
-        - Заголовки слайдов с маркерами рекомендаций переименовываются
-          в нейтральный «Итоги анализа».
-        - Императивные буллеты («следует внедрить...») отфильтровываются.
-        - Если после фильтрации в слайде не осталось буллетов — добавляем
-          placeholder, чтобы не валить рендер.
+        Дайджест — это аналитический формат: только наблюдения, без советов.
+        Если LLM прислал тему с маркерами рекомендаций — переименуем или
+        отфильтруем.
         """
-        return [_sanitize_one_slide(s) for s in slides]
+        sanitized = []
+        for topic in topics:
+            # Чистим title темы
+            if any(m in topic.title.lower() for m in _RECOMMENDATION_TITLE_MARKERS):
+                topic = topic.model_copy(update={"title": "Анализ темы"})
+
+            # Чистим items: фильтруем те, что начинаются с императива
+            clean_items = [
+                item for item in topic.items
+                if not _is_imperative(item.title)
+            ]
+            if not clean_items:
+                clean_items = topic.items[:1]  # оставим хоть один
+            topic = topic.model_copy(update={"items": clean_items})
+
+            sanitized.append(topic)
+        return sanitized
 
 
 # --------------------------------------------------------------------------- #
 # Санитайзер «рекомендательного» контента
 #
-# ВАЖНО: эти константы и функции вынесены на уровень модуля, а не внутрь
-# PresentationSpec. Pydantic v2 интерпретирует любые class-attributes,
-# начинающиеся с подчёркивания, как ModelPrivateAttr — это специальная
-# обёртка, которую нельзя итерировать. Из-за этого `for m in cls._MARKERS`
-# падал с TypeError: "ModelPrivateAttr" object is not iterable.
+# Module-level: подчёркивание здесь — обычное соглашение Python.
+# Внутри BaseModel такие атрибуты превратились бы в ModelPrivateAttr.
 # --------------------------------------------------------------------------- #
 
 _RECOMMENDATION_TITLE_MARKERS = (
     "рекоменд", "следующие шаги", "что делать", "план действий",
-    "необходимо", "меры по устранению", "предложения",
+    "меры по устранению", "предложения",
     "плана внедрения", "дорожная карта",
 )
 
-_IMPERATIVE_BULLET_MARKERS = (
+_IMPERATIVE_MARKERS = (
     "следует ", "необходимо ", "нужно ", "рекомендуется",
     "стоит внедрить", "предлагается", "требуется ", "должен быть внедрён",
 )
 
 
-def _filter_imperative(items: List[str]) -> List[str]:
-    """Убирает буллеты с императивными формулировками."""
-    result = []
-    for item in items:
-        lower = item.lower().strip()
-        if not any(lower.startswith(m) or m in lower[:30]
-                   for m in _IMPERATIVE_BULLET_MARKERS):
-            result.append(item)
-    return result
-
-
-def _sanitize_one_slide(slide: Slide) -> Slide:
-    """Применяет санитайзер к одному слайду."""
-    # Переименование заголовков, похожих на рекомендации
-    if hasattr(slide, "title") and isinstance(getattr(slide, "title", None), str):
-        title_lower = slide.title.lower()
-        if any(m in title_lower for m in _RECOMMENDATION_TITLE_MARKERS):
-            slide = slide.model_copy(update={"title": "Итоги анализа"})
-
-    # Фильтрация буллетов от императивных формулировок
-    if isinstance(slide, BulletsSlide):
-        filtered = _filter_imperative(slide.bullets)
-        if not filtered:
-            filtered = ["Анализ данных представлен на предыдущих слайдах"]
-        slide = slide.model_copy(update={"bullets": filtered})
-
-    elif isinstance(slide, TwoColumnSlide):
-        left = _filter_imperative(slide.left_bullets) or ["—"]
-        right = _filter_imperative(slide.right_bullets) or ["—"]
-        slide = slide.model_copy(update={
-            "left_bullets": left, "right_bullets": right,
-        })
-
-    elif isinstance(slide, ChartWithTextSlide):
-        filtered = _filter_imperative(slide.insights)
-        if not filtered:
-            filtered = ["См. данные на графике"]
-        slide = slide.model_copy(update={"insights": filtered})
-
-    return slide
+def _is_imperative(text: str) -> bool:
+    """True если текст начинается с императивного слова."""
+    lower = text.lower().strip()
+    return any(lower.startswith(m) or m in lower[:30] for m in _IMPERATIVE_MARKERS)

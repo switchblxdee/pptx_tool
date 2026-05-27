@@ -1,63 +1,54 @@
 """
-pptx_generator — LangChain-инструмент для генерации .pptx через GigaChat.
+pptx_generator — LangChain-инструмент для генерации дайджеста .pptx через GigaChat.
 
 Главный публичный API:
-    GeneratePresentationTool — LangChain Tool
-    PresentationBuilder      — низкоуровневая сборка из спеки
-    ExcelReader              — чтение и профилирование xlsx
-    PresentationSpec         — Pydantic-схема презентации
+    GenerateDigestTool — LangChain Tool
+    DigestBuilder      — низкоуровневая сборка из спеки
+    ExcelReader        — чтение и профилирование xlsx
+    DigestSpec         — Pydantic-схема дайджеста
 """
-from .builder import PresentationBuilder
+from .builder import DigestBuilder
 from .excel_reader import DataContext, ExcelReader
 from .schemas import (
-    BulletsSlide,
-    ChartData,
-    ChartSeries,
-    ChartSlide,
-    ChartType,
-    ChartWithTextSlide,
-    ClosingSlide,
     ColorPalette,
-    KPIItem,
-    KPISlide,
-    PresentationSpec,
-    PresentationStyle,
-    QuoteSlide,
-    SectionHeaderSlide,
-    SlideLayout,
-    TitleSlide,
-    TwoColumnSlide,
+    CoverSlide,
+    DigestMeta,
+    DigestSpec,
+    DigestStyle,
+    KPICard,
+    TopicItem,
+    TopicSlide,
     Typography,
 )
-from .tool import GeneratePresentationInput, GeneratePresentationTool
+from .tool import (
+    GenerateDigestInput,
+    GenerateDigestTool,
+    # backward-compat aliases
+    GeneratePresentationInput,
+    GeneratePresentationTool,
+)
 
 __all__ = [
     # Tool
+    "GenerateDigestTool",
+    "GenerateDigestInput",
+    # Backward compatibility
     "GeneratePresentationTool",
     "GeneratePresentationInput",
     # Builder
-    "PresentationBuilder",
+    "DigestBuilder",
     # Reader
     "ExcelReader",
     "DataContext",
     # Schemas
-    "PresentationSpec",
-    "PresentationStyle",
+    "DigestSpec",
+    "DigestStyle",
+    "DigestMeta",
     "ColorPalette",
     "Typography",
-    "ChartType",
-    "ChartData",
-    "ChartSeries",
-    "SlideLayout",
-    "TitleSlide",
-    "SectionHeaderSlide",
-    "BulletsSlide",
-    "TwoColumnSlide",
-    "ChartSlide",
-    "ChartWithTextSlide",
-    "KPISlide",
-    "KPIItem",
-    "QuoteSlide",
-    "ClosingSlide",
+    "CoverSlide",
+    "TopicSlide",
+    "TopicItem",
+    "KPICard",
 ]
-__version__ = "0.1.0"
+__version__ = "0.2.0"
