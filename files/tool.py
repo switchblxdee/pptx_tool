@@ -30,7 +30,11 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .builder import PresentationBuilder
 from .excel_reader import ExcelReader
-from .prompts import SYSTEM_PROMPT, build_user_prompt, get_json_schema_hint
+from .prompts import (
+    analysis_user_prompt,
+    data_only_user_prompt,
+    system_prompt,
+)
 from .schemas import PresentationSpec
 
 
@@ -147,7 +151,17 @@ class GeneratePresentationTool(BaseTool):
     args_schema: Type[BaseModel] = GeneratePresentationInput
 
     llm: BaseChatModel = Field(description="LLM (обычно GigaChat) для генерации структуры")
-    max_retries: int = Field(default=2, description="Сколько раз повторить при невалидном JSON")
+    max_retries: int = Field(default=3, description="Сколько раз повторить при невалидном JSON")
+    inject_system_prompt: bool = Field(
+        default=False,
+        description=(
+            "Если True — инструкция по JSON-схеме идёт в SystemMessage. "
+            "Если False (по умолчанию) — вся инструкция в одном HumanMessage, "
+            "что НЕ конфликтует с уже заданным системным промптом (например, "
+            "'Привет, ты Агата'). Рекомендуется False, если у LLM уже есть "
+            "системная персона."
+        ),
+    )
 
     def _run(
         self,
@@ -196,14 +210,32 @@ class GeneratePresentationTool(BaseTool):
     def _call_llm_with_retries(
         self, data_context, style_prompt: str
     ) -> PresentationSpec:
-        """Дёргает LLM, ретраит при невалидном JSON, добавляя ошибку в контекст."""
-        user_prompt = build_user_prompt(data_context, style_prompt)
-        schema_hint = get_json_schema_hint()
+        """
+        Дёргает LLM, ретраит при невалидном JSON, добавляя ошибку в контекст.
 
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT + "\n\n## Схема ответа\n" + schema_hint),
-            HumanMessage(content=user_prompt),
-        ]
+        Два режима работы:
+
+        1. inject_system_prompt=False (по умолчанию):
+           Всё уезжает в одном HumanMessage. Не трогает системный промпт.
+           Используй этот режим, если у LLM уже есть системная персона
+           («Привет, ты Агата...») — она останется работать.
+
+        2. inject_system_prompt=True:
+           Инструкция в SystemMessage + данные в HumanMessage.
+           Используй, если делаешь отдельный изолированный вызов LLM
+           без предустановленной персоны.
+        """
+        if self.inject_system_prompt:
+            messages = [
+                SystemMessage(content=system_prompt()),
+                HumanMessage(content=data_only_user_prompt(data_context, style_prompt)),
+            ]
+        else:
+            # Одно сообщение — самодостаточная инструкция + данные.
+            # Не перезаписывает системный промпт LLM.
+            messages = [
+                HumanMessage(content=analysis_user_prompt(data_context, style_prompt)),
+            ]
 
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries + 1):
@@ -220,9 +252,10 @@ class GeneratePresentationTool(BaseTool):
                 # Добавляем ошибку в контекст и просим исправить
                 messages.append(response)
                 messages.append(HumanMessage(content=(
-                    f"Ответ невалиден. Ошибка:\n{e}\n\n"
-                    f"Верни ИСПРАВЛЕННЫЙ JSON, строго соответствующий схеме. "
-                    f"Только сырой JSON, без обёрток и комментариев."
+                    f"Твой предыдущий ответ невалиден. Ошибка валидации:\n{e}\n\n"
+                    f"Верни ИСПРАВЛЕННЫЙ JSON, строго соответствующий формату из примера. "
+                    f"Только сырой JSON, начинающийся с {{ и заканчивающийся }}. "
+                    f"Без markdown, без пояснений, без обёрток."
                 )))
 
         raise RuntimeError(
