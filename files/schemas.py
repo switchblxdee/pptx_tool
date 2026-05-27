@@ -260,19 +260,6 @@ class PresentationSpec(BaseModel):
     style: PresentationStyle
     slides: List[Slide] = Field(min_length=1, description="Слайды по порядку")
 
-    # Маркеры "рекомендательного" контента. Если LLM проигнорировал запрет
-    # в промпте и всё равно прислал такое — мы либо переименуем слайд,
-    # либо отфильтруем явно императивные буллеты.
-    _RECOMMENDATION_TITLE_MARKERS = (
-        "рекоменд", "следующие шаги", "что делать", "план действий",
-        "необходимо", "меры по устранению", "предложения",
-        "плана внедрения", "дорожная карта",
-    )
-    _IMPERATIVE_BULLET_MARKERS = (
-        "следует ", "необходимо ", "нужно ", "рекомендуется",
-        "стоит внедрить", "предлагается", "требуется ", "должен быть внедрён",
-    )
-
     @field_validator("slides")
     @classmethod
     def sanitize_recommendations(cls, slides: List[Slide]) -> List[Slide]:
@@ -287,48 +274,68 @@ class PresentationSpec(BaseModel):
         - Если после фильтрации в слайде не осталось буллетов — добавляем
           placeholder, чтобы не валить рендер.
         """
-        sanitized: List[Slide] = []
-        for slide in slides:
-            sanitized.append(cls._sanitize_one(slide))
-        return sanitized
+        return [_sanitize_one_slide(s) for s in slides]
 
-    @classmethod
-    def _sanitize_one(cls, slide: Slide) -> Slide:
-        # Переименование заголовков, похожих на рекомендации
-        if hasattr(slide, "title") and isinstance(slide.title, str):
-            title_lower = slide.title.lower()
-            if any(m in title_lower for m in cls._RECOMMENDATION_TITLE_MARKERS):
-                slide = slide.model_copy(update={"title": "Итоги анализа"})
 
-        # Фильтрация буллетов от императивных формулировок
-        if isinstance(slide, BulletsSlide):
-            filtered = cls._filter_imperative(slide.bullets)
-            if not filtered:
-                filtered = ["Анализ данных представлен на предыдущих слайдах"]
-            slide = slide.model_copy(update={"bullets": filtered})
+# --------------------------------------------------------------------------- #
+# Санитайзер «рекомендательного» контента
+#
+# ВАЖНО: эти константы и функции вынесены на уровень модуля, а не внутрь
+# PresentationSpec. Pydantic v2 интерпретирует любые class-attributes,
+# начинающиеся с подчёркивания, как ModelPrivateAttr — это специальная
+# обёртка, которую нельзя итерировать. Из-за этого `for m in cls._MARKERS`
+# падал с TypeError: "ModelPrivateAttr" object is not iterable.
+# --------------------------------------------------------------------------- #
 
-        elif isinstance(slide, TwoColumnSlide):
-            left = cls._filter_imperative(slide.left_bullets) or ["—"]
-            right = cls._filter_imperative(slide.right_bullets) or ["—"]
-            slide = slide.model_copy(update={
-                "left_bullets": left, "right_bullets": right,
-            })
+_RECOMMENDATION_TITLE_MARKERS = (
+    "рекоменд", "следующие шаги", "что делать", "план действий",
+    "необходимо", "меры по устранению", "предложения",
+    "плана внедрения", "дорожная карта",
+)
 
-        elif isinstance(slide, ChartWithTextSlide):
-            filtered = cls._filter_imperative(slide.insights)
-            if not filtered:
-                filtered = ["См. данные на графике"]
-            slide = slide.model_copy(update={"insights": filtered})
+_IMPERATIVE_BULLET_MARKERS = (
+    "следует ", "необходимо ", "нужно ", "рекомендуется",
+    "стоит внедрить", "предлагается", "требуется ", "должен быть внедрён",
+)
 
-        return slide
 
-    @classmethod
-    def _filter_imperative(cls, items: List[str]) -> List[str]:
-        """Убирает буллеты, начинающиеся с императивных слов."""
-        result = []
-        for item in items:
-            lower = item.lower().strip()
-            if not any(lower.startswith(m) or m in lower[:30]
-                       for m in cls._IMPERATIVE_BULLET_MARKERS):
-                result.append(item)
-        return result
+def _filter_imperative(items: List[str]) -> List[str]:
+    """Убирает буллеты с императивными формулировками."""
+    result = []
+    for item in items:
+        lower = item.lower().strip()
+        if not any(lower.startswith(m) or m in lower[:30]
+                   for m in _IMPERATIVE_BULLET_MARKERS):
+            result.append(item)
+    return result
+
+
+def _sanitize_one_slide(slide: Slide) -> Slide:
+    """Применяет санитайзер к одному слайду."""
+    # Переименование заголовков, похожих на рекомендации
+    if hasattr(slide, "title") and isinstance(getattr(slide, "title", None), str):
+        title_lower = slide.title.lower()
+        if any(m in title_lower for m in _RECOMMENDATION_TITLE_MARKERS):
+            slide = slide.model_copy(update={"title": "Итоги анализа"})
+
+    # Фильтрация буллетов от императивных формулировок
+    if isinstance(slide, BulletsSlide):
+        filtered = _filter_imperative(slide.bullets)
+        if not filtered:
+            filtered = ["Анализ данных представлен на предыдущих слайдах"]
+        slide = slide.model_copy(update={"bullets": filtered})
+
+    elif isinstance(slide, TwoColumnSlide):
+        left = _filter_imperative(slide.left_bullets) or ["—"]
+        right = _filter_imperative(slide.right_bullets) or ["—"]
+        slide = slide.model_copy(update={
+            "left_bullets": left, "right_bullets": right,
+        })
+
+    elif isinstance(slide, ChartWithTextSlide):
+        filtered = _filter_imperative(slide.insights)
+        if not filtered:
+            filtered = ["См. данные на графике"]
+        slide = slide.model_copy(update={"insights": filtered})
+
+    return slide
