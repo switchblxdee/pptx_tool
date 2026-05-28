@@ -9,6 +9,7 @@ pptx_generator — LangChain-инструмент для генерации да
 """
 from .builder import DigestBuilder
 from .excel_reader import DataContext, ExcelReader
+from .json_repair import repair_json
 from .schemas import (
     ColorPalette,
     CoverSlide,
@@ -50,5 +51,7 @@ __all__ = [
     "TopicSlide",
     "TopicItem",
     "KPICard",
+    # JSON repair (полезно для отладки)
+    "repair_json",
 ]
 __version__ = "0.2.0"
