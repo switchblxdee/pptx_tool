@@ -27,14 +27,32 @@ _LINE_COMMENT_RE = re.compile(r"//[^\n\r]*")
 _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 
+# Reasoning-теги, которыми thinking-модели (DeepSeek V4, GLM, QwQ и др.)
+# оборачивают свои размышления перед финальным ответом.
+_REASONING_TAGS_RE = re.compile(
+    r"<(think|thinking|reasoning|thought|reflection)>.*?</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_reasoning(text: str) -> str:
+    """
+    Убирает блоки рассуждений thinking-моделей.
+
+    DeepSeek V4, GLM и другие reasoning-модели могут вернуть
+    <think>...</think> перед JSON. Если такой блок есть — вырезаем его,
+    чтобы он не мешал извлечению JSON.
+    """
+    return _REASONING_TAGS_RE.sub("", text)
+
 
 def extract_json_text(raw: str) -> str:
     """
     Достаёт JSON-фрагмент из текста ответа.
 
-    Сначала ищем fenced-блок, потом — баланс первой { и последней }.
+    Порядок: убрать reasoning-теги → fenced-блок → баланс { }.
     """
-    raw = raw.strip()
+    raw = _strip_reasoning(raw).strip()
 
     fence = _FENCE_RE.search(raw)
     if fence:
