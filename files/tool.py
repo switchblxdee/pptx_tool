@@ -179,12 +179,15 @@ class GenerateDigestTool(BaseTool):
         ),
     )
     use_structured_output: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "Если True (по умолчанию) — сначала пробуем llm.with_structured_output() "
-            "через function calling. Это самый надёжный способ для GigaChat: модель "
-            "отдаёт структурированный вызов вместо сырого текста. При неудаче "
-            "автоматически откатываемся на текстовый режим с ремонтом JSON."
+            "Использовать ли llm.with_structured_output() через function calling. "
+            "ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО. Причина: модели работают через внутренний "
+            "GigaChat-прокси, и транспорт function-calling к GLM/DeepSeek "
+            "непредсказуем (часто возвращает None). Текстовый режим с few-shot "
+            "промптом и ремонтом JSON надёжнее для сильных моделей (GLM, DeepSeek) "
+            "и не зависит от деталей прокси. Включай только если уверен, что "
+            "structured output корректно проброшен к модели."
         ),
     )
 
@@ -281,9 +284,14 @@ class GenerateDigestTool(BaseTool):
         - function_calling (по умолчанию) — через tool-calling транспорт
         - json_mode — модель обязана вернуть валидный JSON по схеме
 
-        Пробуем оба: сначала дефолтный, при неудаче — json_mode.
-        Возвращает DigestSpec при успехе или None (тогда сработает
-        текстовый откат).
+        Пробуем оба. Возвращает DigestSpec при успехе или None.
+
+        ВАЖНО: None — это НОРМАЛЬНЫЙ исход, не ошибка. DigestSpec —
+        сложная вложенная схема (массивы объектов, опциональные блоки),
+        и GigaChat часто не вытягивает её через structured output,
+        возвращая None или пустой объект. В этом случае управление
+        корректно переходит к текстовому режиму, который для GigaChat
+        на практике надёжнее за счёт few-shot примера и ремонта JSON.
         """
         if self.inject_system_prompt:
             messages = [
@@ -297,25 +305,50 @@ class GenerateDigestTool(BaseTool):
 
         # Пробуем доступные методы по очереди
         for method_kwargs in ({}, {"method": "json_mode"}):
+            method_name = method_kwargs.get("method", "function_calling")
             try:
                 structured_llm = self.llm.with_structured_output(
                     DigestSpec, **method_kwargs
                 )
             except (AttributeError, NotImplementedError, TypeError) as e:
-                logger.info("with_structured_output(%s) недоступен: %s", method_kwargs, e)
+                logger.info(
+                    "structured_output[%s] недоступен у этой модели: %s",
+                    method_name, e,
+                )
                 continue
 
             try:
                 result = structured_llm.invoke(messages)
-                if isinstance(result, DigestSpec):
-                    return result
-                if isinstance(result, dict):
-                    return DigestSpec.model_validate(result)
-                logger.warning("Структурный вывод вернул тип %s", type(result))
             except Exception as e:
-                logger.warning("Структурный вывод (%s) упал: %s", method_kwargs, e)
+                logger.info(
+                    "structured_output[%s] не справился (%s) — пробую дальше",
+                    method_name, type(e).__name__,
+                )
                 continue
 
+            # Нормализуем результат
+            if isinstance(result, DigestSpec):
+                logger.info("structured_output[%s] успешен", method_name)
+                return result
+            if isinstance(result, dict) and result:
+                try:
+                    spec = DigestSpec.model_validate(result)
+                    logger.info("structured_output[%s] успешен (из dict)", method_name)
+                    return spec
+                except ValidationError as e:
+                    logger.info(
+                        "structured_output[%s] вернул dict не по схеме — пробую дальше",
+                        method_name,
+                    )
+                    continue
+
+            # None или пустой объект — ожидаемо для сложной схемы
+            logger.info(
+                "structured_output[%s] вернул %s — перехожу к следующему методу",
+                method_name, type(result).__name__,
+            )
+
+        logger.info("structured_output не дал результата — откат на текстовый режим")
         return None
 
     def _text_mode_with_retries(
