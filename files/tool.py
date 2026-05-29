@@ -54,14 +54,29 @@ class GenerateDigestInput(BaseModel):
     )
     style_prompt: str = Field(
         description=(
-            "Описание желаемого стиля и содержания презентации на естественном языке. "
-            "Например: 'Корпоративная презентация в тёмной палитре, акцент на проблемах "
-            "качества, для топ-менеджмента, 10-12 слайдов'."
+            "Описание желаемого стиля и содержания дайджеста на естественном языке. "
+            "Например: 'Корпоративный дайджест в пастельной палитре для топ-менеджмента'."
         )
     )
     output_path: Optional[str] = Field(
         default=None,
         description="Куда сохранить .pptx. Если не указан — рядом с входным файлом.",
+    )
+    slide_count: Optional[int] = Field(
+        default=None,
+        description=(
+            "Сколько topic-слайдов (тем) сделать. Если не указано — определяется "
+            "автоматически: LLM решает по важности на основе числа уникальных тем "
+            "в данных."
+        ),
+    )
+    grouping_column: Optional[str] = Field(
+        default=None,
+        description=(
+            "Имя колонки, по которой группировать данные в темы (1 уникальное "
+            "значение = 1 topic-слайд). Если не указано — ищется автоматически "
+            "среди кандидатов ('Объект сигнала', 'Продукт', 'Тема' и т.п.)."
+        ),
     )
 
 
@@ -178,13 +193,18 @@ class GenerateDigestTool(BaseTool):
         xlsx_path: str,
         style_prompt: str,
         output_path: Optional[str] = None,
+        slide_count: Optional[int] = None,
+        grouping_column: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Синхронный запуск."""
         try:
-            return self._generate(xlsx_path, style_prompt, output_path)
+            return self._generate(
+                xlsx_path, style_prompt, output_path,
+                slide_count, grouping_column,
+            )
         except Exception as e:
-            logger.exception("Ошибка при генерации презентации")
+            logger.exception("Ошибка при генерации дайджеста")
             # Возвращаем читабельную ошибку агенту, чтобы он мог отреагировать
             return f"ОШИБКА: {type(e).__name__}: {e}"
 
@@ -193,14 +213,21 @@ class GenerateDigestTool(BaseTool):
         xlsx_path: str,
         style_prompt: str,
         output_path: Optional[str],
+        slide_count: Optional[int] = None,
+        grouping_column: Optional[str] = None,
     ) -> str:
-        # 1. Читаем Excel
+        # 1. Читаем Excel с автопоиском группировки
         logger.info("Читаю Excel: %s", xlsx_path)
-        data_context = ExcelReader(xlsx_path).read()
+        data_context = ExcelReader(
+            xlsx_path,
+            grouping_column=grouping_column,
+            requested_slide_count=slide_count,
+        ).read()
         logger.info(
-            "Прочитано: %d строк × %d колонок, %d символов суммаризации",
+            "Прочитано: %d строк × %d колонок. Группировка: %s (%d тем)",
             data_context.row_count, data_context.column_count,
-            len(data_context.summary_text),
+            data_context.grouping.column_name if data_context.grouping else "—",
+            data_context.grouping.group_count if data_context.grouping else 0,
         )
 
         # 2. Просим LLM сгенерить структуру (с ретраями)
@@ -212,7 +239,10 @@ class GenerateDigestTool(BaseTool):
             output_path = str(input_path.with_suffix(".pptx"))
 
         # 4. Собираем .pptx
-        logger.info("Собираю .pptx: %d слайдов → %s", len(spec.slides), output_path)
+        logger.info(
+            "Собираю дайджест: обложка + %d тем → %s",
+            len(spec.topics), output_path,
+        )
         result_path = DigestBuilder(spec).build(output_path)
 
         return str(result_path)

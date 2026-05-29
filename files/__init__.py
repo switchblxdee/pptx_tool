@@ -11,12 +11,19 @@ from .builder import DigestBuilder
 from .excel_reader import DataContext, ExcelReader
 from .json_repair import repair_json
 from .schemas import (
+    AttentionItem,
+    AttentionSlide,
+    ClosingSlide,
     ColorPalette,
     CoverSlide,
     DigestMeta,
     DigestSpec,
     DigestStyle,
+    ExecutiveSummarySlide,
     KPICard,
+    PatternItem,
+    PatternsSlide,
+    SummaryPoint,
     TopicItem,
     TopicSlide,
     Typography,
@@ -51,6 +58,13 @@ __all__ = [
     "TopicSlide",
     "TopicItem",
     "KPICard",
+    "ExecutiveSummarySlide",
+    "SummaryPoint",
+    "PatternsSlide",
+    "PatternItem",
+    "AttentionSlide",
+    "AttentionItem",
+    "ClosingSlide",
     # JSON repair (полезно для отладки)
     "repair_json",
 ]

@@ -193,19 +193,148 @@ class TopicSlide(BaseModel):
 # --------------------------------------------------------------------------- #
 # Корневая спецификация
 # --------------------------------------------------------------------------- #
+# Аналитические слайды (executive summary, паттерны, риски, итоги)
+# --------------------------------------------------------------------------- #
+
+class SummaryPoint(BaseModel):
+    """Один пункт executive summary — с акцентом на главную мысль."""
+    headline: str = Field(max_length=80, description="Главная мысль одной фразой")
+    detail: Optional[str] = Field(
+        default=None, max_length=160,
+        description="Раскрытие/контекст мысли"
+    )
+
+
+class ExecutiveSummarySlide(BaseModel):
+    """
+    Executive summary — слайд с главными выводами для руководства.
+
+    Это первое, что читает топ-менеджер. Должен отвечать на вопрос
+    «что произошло за период и почему это важно» в 3-5 тезисах.
+    """
+    title: str = Field(default="Главное за период", max_length=60)
+    intro: Optional[str] = Field(
+        default=None, max_length=240,
+        description="Вводный абзац — общая картина периода 1-2 предложениями"
+    )
+    points: List[SummaryPoint] = Field(
+        min_length=2, max_length=5,
+        description="Ключевые выводы"
+    )
+
+
+class PatternItem(BaseModel):
+    """Сквозной паттерн — закономерность, проявляющаяся в нескольких темах."""
+    title: str = Field(max_length=80, description="Название паттерна")
+    description: str = Field(max_length=200, description="В чём проявляется, где встречается")
+    affected_count: Optional[int] = Field(
+        default=None, ge=0, le=9999,
+        description="Сколько тем/продуктов затронуто паттерном"
+    )
+
+
+class PatternsSlide(BaseModel):
+    """
+    Сквозные паттерны — что общего между разными темами.
+
+    Поднимает анализ с уровня отдельных проблем на уровень системных
+    закономерностей. Это работа продакт-аналитика, а не просто список.
+    """
+    title: str = Field(default="Сквозные паттерны", max_length=60)
+    intro: Optional[str] = Field(default=None, max_length=200)
+    patterns: List[PatternItem] = Field(min_length=2, max_length=5)
+
+
+class AttentionItem(BaseModel):
+    """Пункт «на что обратить внимание» — приоритетный сигнал."""
+    title: str = Field(max_length=90, description="Краткая суть")
+    rationale: str = Field(max_length=200, description="Почему это важно / на что влияет")
+    severity: str = Field(
+        default="средний",
+        max_length=20,
+        description="Уровень: 'высокий', 'средний', 'низкий'"
+    )
+
+    @field_validator("severity")
+    @classmethod
+    def normalize_severity(cls, v: str) -> str:
+        v = v.lower().strip()
+        mapping = {
+            "high": "высокий", "critical": "высокий", "критический": "высокий",
+            "medium": "средний", "mid": "средний",
+            "low": "низкий",
+        }
+        v = mapping.get(v, v)
+        if v not in ("высокий", "средний", "низкий"):
+            return "средний"
+        return v
+
+
+class AttentionSlide(BaseModel):
+    """
+    «На что обратить внимание» — топ приоритетных сигналов.
+
+    Не рекомендации («сделайте X»), а наблюдения с оценкой важности
+    («тема Y затрагивает Z пользователей и растёт»).
+    """
+    title: str = Field(default="На что обратить внимание", max_length=60)
+    items: List[AttentionItem] = Field(min_length=2, max_length=5)
+
+
+class ClosingSlide(BaseModel):
+    """
+    Финальный слайд — итоги и общая динамика.
+
+    Закрывает нарратив: что в сумме, куда движется ситуация.
+    """
+    title: str = Field(default="Итоги периода", max_length=60)
+    summary: str = Field(max_length=300, description="Обобщающий текст по периоду")
+    kpis: List[KPICard] = Field(
+        default_factory=list, max_length=4,
+        description="Финальные сводные метрики (опционально)"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Корневая спецификация
+# --------------------------------------------------------------------------- #
 
 class DigestSpec(BaseModel):
     """
     Полная спецификация дайджеста.
+
+    Порядок слайдов в итоговой презентации:
+        1. cover (обложка)
+        2. executive_summary (если есть)
+        3. topics[] (детальные слайды по темам)
+        4. patterns (если есть)
+        5. attention (если есть)
+        6. closing (если есть)
 
     Это то, что возвращает LLM и принимает на вход DigestBuilder.
     """
     style: DigestStyle
     meta: DigestMeta
     cover: CoverSlide
+    executive_summary: Optional[ExecutiveSummarySlide] = Field(
+        default=None,
+        description="Слайд с главными выводами для руководства (идёт сразу после обложки)"
+    )
     topics: List[TopicSlide] = Field(
-        min_length=1, max_length=20,
+        min_length=1, max_length=25,
         description="Темы для детальных слайдов"
+    )
+    patterns: Optional[PatternsSlide] = Field(
+        default=None,
+        description="Слайд сквозных паттернов между темами"
+    )
+    attention: Optional[AttentionSlide] = Field(
+        default=None,
+        description="Слайд 'на что обратить внимание' (приоритетные сигналы)"
+    )
+    closing: Optional[ClosingSlide] = Field(
+        default=None,
+        description="Финальный слайд с итогами и динамикой"
     )
 
     @field_validator("topics")

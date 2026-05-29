@@ -28,10 +28,14 @@ from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 from .schemas import (
+    AttentionSlide,
+    ClosingSlide,
     CoverSlide,
     DigestSpec,
     DigestStyle,
+    ExecutiveSummarySlide,
     KPICard,
+    PatternsSlide,
     TopicItem,
     TopicSlide,
 )
@@ -76,22 +80,68 @@ class DigestBuilder:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Считаем общее число слайдов для нумерации в футере
+        total = 1  # cover
+        if self.spec.executive_summary:
+            total += 1
+        total += len(self.spec.topics)
+        if self.spec.patterns:
+            total += 1
+        if self.spec.attention:
+            total += 1
+        if self.spec.closing:
+            total += 1
+
+        page = 1
+
         # 1. Обложка
-        cover_slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
-        self._set_gradient_background(cover_slide)
+        cover_slide = self._new_slide()
         self._render_cover(cover_slide, self.spec.cover)
         self._render_meta_header(cover_slide)
 
-        # 2. Topic-слайды
-        n_topics = len(self.spec.topics)
-        for i, topic in enumerate(self.spec.topics, start=1):
-            slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
-            self._set_gradient_background(slide)
+        # 2. Executive summary (сразу после обложки)
+        if self.spec.executive_summary:
+            page += 1
+            slide = self._new_slide()
+            self._render_executive_summary(slide, self.spec.executive_summary)
+            self._render_meta_footer(slide, page_number=page, total=total)
+
+        # 3. Topic-слайды
+        for topic in self.spec.topics:
+            page += 1
+            slide = self._new_slide()
             self._render_topic(slide, topic)
-            self._render_meta_footer(slide, page_number=i + 1, total=n_topics + 1)
+            self._render_meta_footer(slide, page_number=page, total=total)
+
+        # 4. Сквозные паттерны
+        if self.spec.patterns:
+            page += 1
+            slide = self._new_slide()
+            self._render_patterns(slide, self.spec.patterns)
+            self._render_meta_footer(slide, page_number=page, total=total)
+
+        # 5. На что обратить внимание
+        if self.spec.attention:
+            page += 1
+            slide = self._new_slide()
+            self._render_attention(slide, self.spec.attention)
+            self._render_meta_footer(slide, page_number=page, total=total)
+
+        # 6. Итоги
+        if self.spec.closing:
+            page += 1
+            slide = self._new_slide()
+            self._render_closing(slide, self.spec.closing)
+            self._render_meta_footer(slide, page_number=page, total=total)
 
         self.prs.save(output_path)
         return output_path
+
+    def _new_slide(self):
+        """Создаёт пустой слайд с градиентным фоном."""
+        slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
+        self._set_gradient_background(slide)
+        return slide
 
     # ----------------------------------------------------------------------- #
     # COVER
@@ -371,6 +421,301 @@ class DigestBuilder:
             run.font.size = Pt(9)
             run.font.bold = True
             run.font.color.rgb = self._rgb("FFFFFF")
+
+    # ----------------------------------------------------------------------- #
+    # АНАЛИТИЧЕСКИЕ СЛАЙДЫ
+    # ----------------------------------------------------------------------- #
+
+    def _render_slide_title(self, slide, title: str, accent_bar: bool = True) -> None:
+        """Общий заголовок аналитического слайда с акцентным маркером."""
+        if accent_bar:
+            bar = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE,
+                Inches(0.6), Inches(0.7),
+                Inches(0.1), Inches(0.6),
+            )
+            self._fill_solid(bar, self.palette.accent)
+            bar.line.fill.background()
+
+        self._add_text(
+            slide, title,
+            left=Inches(0.85), top=Inches(0.6),
+            width=Inches(11.5), height=Inches(0.8),
+            font=self.style.typography.heading_font,
+            size=32, bold=True, color=self.palette.text_dark,
+            anchor=MSO_ANCHOR.MIDDLE,
+        )
+
+    def _render_executive_summary(self, slide, s: ExecutiveSummarySlide) -> None:
+        """Executive summary: вводный абзац + крупные тезисы."""
+        self._render_slide_title(slide, s.title)
+
+        top = Inches(1.7)
+
+        # Вводный абзац на пастельной плашке
+        if s.intro:
+            intro_card = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                MARGIN_X, top, SLIDE_WIDTH - MARGIN_X * 2, Inches(0.9),
+            )
+            intro_card.adjustments[0] = 0.06
+            self._fill_solid(intro_card, self.palette.card_bg)
+            intro_card.line.fill.background()
+            self._apply_subtle_shadow(intro_card)
+
+            self._add_text(
+                slide, s.intro,
+                left=MARGIN_X + Inches(0.35), top=top + Inches(0.1),
+                width=SLIDE_WIDTH - MARGIN_X * 2 - Inches(0.7), height=Inches(0.7),
+                font=self.style.typography.body_font,
+                size=14, color=self.palette.text_dark,
+                anchor=MSO_ANCHOR.MIDDLE,
+            )
+            top = top + Inches(1.2)
+
+        # Тезисы: каждый — headline крупно + detail мельче
+        n = len(s.points)
+        usable_height = SLIDE_HEIGHT - top - Inches(0.7)
+        row_height = Emu(int(usable_height / n))
+
+        for i, point in enumerate(s.points):
+            row_top = top + row_height * i
+
+            # Номерной акцент-кружок
+            num_circle = slide.shapes.add_shape(
+                MSO_SHAPE.OVAL,
+                MARGIN_X, row_top + Inches(0.05),
+                Inches(0.45), Inches(0.45),
+            )
+            self._fill_solid(num_circle, self.palette.accent)
+            num_circle.line.fill.background()
+            tf = num_circle.text_frame
+            tf.margin_left = Emu(0); tf.margin_right = Emu(0)
+            tf.margin_top = Emu(0); tf.margin_bottom = Emu(0)
+            tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+            tf.text = str(i + 1)
+            pp = tf.paragraphs[0]
+            pp.alignment = PP_ALIGN.CENTER
+            for run in pp.runs:
+                run.font.name = self.style.typography.heading_font
+                run.font.size = Pt(18)
+                run.font.bold = True
+                run.font.color.rgb = self._rgb(self.palette.kpi_bg)
+
+            content_left = MARGIN_X + Inches(0.7)
+            content_width = SLIDE_WIDTH - content_left - MARGIN_X
+
+            # Headline
+            self._add_text(
+                slide, point.headline,
+                left=content_left, top=row_top,
+                width=content_width, height=Inches(0.45),
+                font=self.style.typography.heading_font,
+                size=18, bold=True, color=self.palette.text_dark,
+            )
+            # Detail
+            if point.detail:
+                self._add_text(
+                    slide, point.detail,
+                    left=content_left, top=row_top + Inches(0.45),
+                    width=content_width, height=Inches(0.5),
+                    font=self.style.typography.body_font,
+                    size=13, color=self.palette.text_muted,
+                )
+
+    def _render_patterns(self, slide, s: PatternsSlide) -> None:
+        """Сквозные паттерны: карточки-блоки с описанием закономерностей."""
+        self._render_slide_title(slide, s.title)
+
+        top = Inches(1.7)
+        if s.intro:
+            self._add_text(
+                slide, s.intro,
+                left=MARGIN_X, top=top,
+                width=SLIDE_WIDTH - MARGIN_X * 2, height=Inches(0.6),
+                font=self.style.typography.body_font,
+                size=14, color=self.palette.text_muted,
+            )
+            top = top + Inches(0.75)
+
+        n = len(s.patterns)
+        usable_height = SLIDE_HEIGHT - top - Inches(0.7)
+        gap = Inches(0.2)
+        card_height = Emu(int((usable_height - gap * (n - 1)) / n))
+
+        for i, pattern in enumerate(s.patterns):
+            card_top = top + (card_height + gap) * i
+            card = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                MARGIN_X, card_top,
+                SLIDE_WIDTH - MARGIN_X * 2, card_height,
+            )
+            card.adjustments[0] = 0.08
+            self._fill_solid(card, self.palette.card_bg)
+            card.line.fill.background()
+            self._apply_subtle_shadow(card)
+
+            inner_x = MARGIN_X + Inches(0.4)
+
+            # Заголовок паттерна
+            title_width = SLIDE_WIDTH - MARGIN_X * 2 - Inches(0.8) - Inches(1.6)
+            self._add_text(
+                slide, pattern.title,
+                left=inner_x, top=card_top + Inches(0.15),
+                width=title_width, height=Inches(0.4),
+                font=self.style.typography.heading_font,
+                size=16, bold=True, color=self.palette.text_dark,
+            )
+            # Описание
+            self._add_text(
+                slide, pattern.description,
+                left=inner_x, top=card_top + Inches(0.55),
+                width=title_width, height=card_height - Inches(0.6),
+                font=self.style.typography.body_font,
+                size=12, color=self.palette.text_muted,
+            )
+
+            # Бейдж «затронуто N тем» справа
+            if pattern.affected_count is not None:
+                badge_left = SLIDE_WIDTH - MARGIN_X - Inches(1.7)
+                self._add_text(
+                    slide, str(pattern.affected_count),
+                    left=badge_left, top=card_top + Inches(0.15),
+                    width=Inches(1.4), height=Inches(0.5),
+                    font=self.style.typography.heading_font,
+                    size=28, bold=True, color=self.palette.accent,
+                    align=PP_ALIGN.RIGHT,
+                )
+                self._add_text(
+                    slide, "тем затронуто",
+                    left=badge_left, top=card_top + Inches(0.65),
+                    width=Inches(1.4), height=Inches(0.3),
+                    font=self.style.typography.body_font,
+                    size=10, color=self.palette.text_muted,
+                    align=PP_ALIGN.RIGHT,
+                )
+
+    def _render_attention(self, slide, s: AttentionSlide) -> None:
+        """На что обратить внимание: список с цветовыми маркерами важности."""
+        self._render_slide_title(slide, s.title)
+
+        # Цвета severity
+        severity_colors = {
+            "высокий": self.palette.badge,
+            "средний": self.palette.accent,
+            "низкий": self.palette.text_muted,
+        }
+
+        top = Inches(1.8)
+        n = len(s.items)
+        gap = Inches(0.2)
+        usable_height = SLIDE_HEIGHT - top - Inches(0.7)
+        card_height = Emu(int((usable_height - gap * (n - 1)) / n))
+
+        for i, item in enumerate(s.items):
+            card_top = top + (card_height + gap) * i
+            color = severity_colors.get(item.severity, self.palette.accent)
+
+            # Карточка
+            card = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                MARGIN_X, card_top,
+                SLIDE_WIDTH - MARGIN_X * 2, card_height,
+            )
+            card.adjustments[0] = 0.08
+            self._fill_solid(card, self.palette.kpi_bg)
+            card.line.fill.background()
+            self._apply_subtle_shadow(card)
+
+            # Цветная полоса severity слева
+            sev_bar = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                MARGIN_X + Inches(0.15), card_top + Inches(0.15),
+                Inches(0.12), card_height - Inches(0.3),
+            )
+            sev_bar.adjustments[0] = 0.5
+            self._fill_solid(sev_bar, color)
+            sev_bar.line.fill.background()
+
+            inner_x = MARGIN_X + Inches(0.5)
+            content_width = SLIDE_WIDTH - inner_x - MARGIN_X - Inches(1.5)
+
+            # Заголовок
+            self._add_text(
+                slide, item.title,
+                left=inner_x, top=card_top + Inches(0.15),
+                width=content_width, height=Inches(0.4),
+                font=self.style.typography.heading_font,
+                size=15, bold=True, color=self.palette.text_dark,
+            )
+            # Обоснование
+            self._add_text(
+                slide, item.rationale,
+                left=inner_x, top=card_top + Inches(0.55),
+                width=content_width, height=card_height - Inches(0.6),
+                font=self.style.typography.body_font,
+                size=12, color=self.palette.text_muted,
+            )
+
+            # Бейдж severity справа
+            sev_badge_left = SLIDE_WIDTH - MARGIN_X - Inches(1.3)
+            badge = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                sev_badge_left, card_top + (card_height - Inches(0.35)) / 2,
+                Inches(1.1), Inches(0.35),
+            )
+            badge.adjustments[0] = 0.5
+            self._fill_solid(badge, color)
+            badge.line.fill.background()
+            tf = badge.text_frame
+            tf.margin_left = Emu(0); tf.margin_right = Emu(0)
+            tf.margin_top = Emu(0); tf.margin_bottom = Emu(0)
+            tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+            tf.text = item.severity
+            pp = tf.paragraphs[0]
+            pp.alignment = PP_ALIGN.CENTER
+            for run in pp.runs:
+                run.font.name = self.style.typography.body_font
+                run.font.size = Pt(11)
+                run.font.bold = True
+                run.font.color.rgb = self._rgb(self.palette.kpi_bg)
+
+    def _render_closing(self, slide, s: ClosingSlide) -> None:
+        """Финальный слайд: обобщающий текст + опциональные итоговые KPI."""
+        self._render_slide_title(slide, s.title)
+
+        # Обобщающий текст на крупной плашке
+        summary_card = slide.shapes.add_shape(
+            MSO_SHAPE.ROUNDED_RECTANGLE,
+            MARGIN_X, Inches(1.8),
+            SLIDE_WIDTH - MARGIN_X * 2, Inches(2.2),
+        )
+        summary_card.adjustments[0] = 0.05
+        self._fill_solid(summary_card, self.palette.card_bg)
+        summary_card.line.fill.background()
+        self._apply_subtle_shadow(summary_card)
+
+        self._add_text(
+            slide, s.summary,
+            left=MARGIN_X + Inches(0.5), top=Inches(2.0),
+            width=SLIDE_WIDTH - MARGIN_X * 2 - Inches(1.0), height=Inches(1.8),
+            font=self.style.typography.body_font,
+            size=16, color=self.palette.text_dark,
+            anchor=MSO_ANCHOR.MIDDLE,
+        )
+
+        # Итоговые KPI, если есть
+        if s.kpis:
+            self._render_kpi_row(
+                slide, s.kpis,
+                top=Inches(4.6),
+                height=Inches(1.6),
+                value_size=40, label_size=12,
+                value_color=self.palette.text_dark,
+                label_color=self.palette.text_muted,
+                card_bg=self.palette.kpi_bg,
+                border_color=None,
+            )
 
     # ----------------------------------------------------------------------- #
     # KPI карточки (одинаковая логика для cover и topic)
