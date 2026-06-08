@@ -34,7 +34,8 @@ from .prompts import (
     data_only_user_prompt,
     system_prompt,
 )
-from .schemas import DigestSpec
+from .schemas import ColorPalette, DigestSpec
+from .themes import detect_theme, resolve_palette
 
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,17 @@ class GenerateDigestTool(BaseTool):
             "structured output корректно проброшен к модели."
         ),
     )
+    force_palette_from_style: bool = Field(
+        default=True,
+        description=(
+            "Если True (по умолчанию) — палитра определяется по ключевым словам "
+            "из style_prompt ('тёмное оформление' → тёмная тема и т.п.) и "
+            "ПРИНУДИТЕЛЬНО заменяет палитру от LLM. Это гарантирует, что стиль "
+            "пользователя применится. Если ключевых слов в промпте нет — палитра "
+            "от LLM сохраняется. Выключи (False), если хочешь полностью доверять "
+            "цвета модели."
+        ),
+    )
 
     def _run(
         self,
@@ -210,6 +222,34 @@ class GenerateDigestTool(BaseTool):
             logger.exception("Ошибка при генерации дайджеста")
             # Возвращаем читабельную ошибку агенту, чтобы он мог отреагировать
             return f"ОШИБКА: {type(e).__name__}: {e}"
+
+    @staticmethod
+    def _apply_detected_palette(spec: DigestSpec, style_prompt: str) -> DigestSpec:
+        """
+        Заменяет палитру в спеке на детектированную по style_prompt.
+
+        Если в промпте есть ключевые слова темы ('тёмное', 'корпоративный',
+        'яркий' и т.п.) — берём готовую палитру-пресет. Если ключевых слов
+        нет — оставляем палитру, которую сгенерил LLM (не трогаем).
+        """
+        preset = detect_theme(style_prompt)
+        if preset is None:
+            # Пользователь не указал узнаваемый стиль — доверяем LLM
+            return spec
+
+        palette_dict = dict(preset.palette)
+        try:
+            new_palette = ColorPalette(**palette_dict)
+        except Exception as e:
+            logger.warning("Не удалось применить пресет '%s': %s", preset.name, e)
+            return spec
+
+        new_style = spec.style.model_copy(update={"palette": new_palette})
+        logger.info(
+            "Применена палитра-пресет '%s' по запросу пользователя",
+            preset.name,
+        )
+        return spec.model_copy(update={"style": new_style})
 
     @staticmethod
     def _enforce_topic_count(spec: DigestSpec, target: int) -> DigestSpec:
@@ -288,6 +328,13 @@ class GenerateDigestTool(BaseTool):
         # Модели плохо считают — поэтому не доверяем, а контролируем сами.
         if slide_count is not None:
             spec = self._enforce_topic_count(spec, slide_count)
+
+        # 2.6. ПРИНУДИТЕЛЬНО применяем палитру по стилю из запроса.
+        # LLM плохо слушает указания про цвета («тёмное оформление») и копирует
+        # палитру из примера. Детектируем тему по ключевым словам и подставляем
+        # готовую палитру — так стиль пользователя применяется гарантированно.
+        if self.force_palette_from_style:
+            spec = self._apply_detected_palette(spec, style_prompt)
 
         # 3. Определяем путь вывода
         if output_path is None:
