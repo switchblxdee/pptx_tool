@@ -157,9 +157,14 @@ class DataContext:
         parts.append("")
         parts.append("=== КОЛИЧЕСТВО ТЕМ (TOPIC-СЛАЙДОВ) ===")
         if self.requested_slide_count:
+            n = self.requested_slide_count
             parts.append(
-                f"Пользователь явно запросил {self.requested_slide_count} тем. "
-                f"Сделай ровно столько topic-слайдов, выбрав самые важные."
+                f"⚠️ КРИТИЧНО: массив \"topics\" должен содержать РОВНО {n} "
+                f"элементов. Не {n - 1}, не {n + 1}, а именно {n}.\n"
+                f"Отбери {n} самых важных тем по числу сигналов/упоминаний. "
+                f"Перед возвратом JSON ПОСЧИТАЙ элементы в \"topics\" — их должно "
+                f"быть ровно {n}. Если получилось больше — удали наименее значимые. "
+                f"Если меньше — добавь следующие по важности из данных."
             )
         elif self.grouping and self.grouping.column_name:
             parts.append(

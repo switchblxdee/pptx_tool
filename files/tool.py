@@ -211,6 +211,54 @@ class GenerateDigestTool(BaseTool):
             # Возвращаем читабельную ошибку агенту, чтобы он мог отреагировать
             return f"ОШИБКА: {type(e).__name__}: {e}"
 
+    @staticmethod
+    def _enforce_topic_count(spec: DigestSpec, target: int) -> DigestSpec:
+        """
+        Приводит число topic-слайдов ровно к target.
+
+        Модели систематически не соблюдают точное количество (просишь 15 —
+        делает 20). Поэтому контролируем программно:
+        - если тем больше target → оставляем target самых «весомых»
+          (по числу items и суммарным упоминаниям);
+        - если меньше → оставляем как есть (выдумывать темы нельзя,
+          это исказит данные; логируем предупреждение).
+        """
+        topics = list(spec.topics)
+        current = len(topics)
+
+        if current == target:
+            return spec
+
+        if current > target:
+            # Ранжируем темы по значимости и оставляем топ-target.
+            # Вес = суммарные упоминания во всех items + число items.
+            def weight(topic) -> int:
+                mentions = sum(getattr(it, "mentions", 0) or 0 for it in topic.items)
+                return mentions * 10 + len(topic.items)
+
+            ranked = sorted(topics, key=weight, reverse=True)
+            kept = ranked[:target]
+
+            # Сохраняем исходный порядок следования (по индексу в оригинале),
+            # чтобы не перемешать логику повествования.
+            kept_set = {id(t) for t in kept}
+            ordered = [t for t in topics if id(t) in kept_set]
+
+            logger.info(
+                "Тем сгенерировано %d, запрошено %d — оставляю %d самых значимых",
+                current, target, target,
+            )
+            return spec.model_copy(update={"topics": ordered})
+
+        # current < target
+        logger.warning(
+            "Модель вернула %d тем, запрошено %d. Дополнять выдуманными темами "
+            "нельзя (исказит данные) — оставляю %d. Возможно, в данных меньше "
+            "уникальных тем, чем запрошено.",
+            current, target, current,
+        )
+        return spec
+
     def _generate(
         self,
         xlsx_path: str,
@@ -235,6 +283,11 @@ class GenerateDigestTool(BaseTool):
 
         # 2. Просим LLM сгенерить структуру (с ретраями)
         spec = self._call_llm_with_retries(data_context, style_prompt)
+
+        # 2.5. ПРИНУДИТЕЛЬНО приводим число тем к запрошенному.
+        # Модели плохо считают — поэтому не доверяем, а контролируем сами.
+        if slide_count is not None:
+            spec = self._enforce_topic_count(spec, slide_count)
 
         # 3. Определяем путь вывода
         if output_path is None:
@@ -375,25 +428,78 @@ class GenerateDigestTool(BaseTool):
             response = self.llm.invoke(messages)
             raw = response.content if isinstance(response.content, str) else str(response.content)
 
+            # Детектируем обрыв по лимиту токенов (finish_reason == "length")
+            was_truncated = self._is_truncated(response)
+            if was_truncated:
+                logger.warning(
+                    "Ответ оборван по лимиту токенов (попытка %d). "
+                    "json_repair попробует закрыть JSON; "
+                    "рекомендуется увеличить max_tokens у модели.",
+                    attempt + 1,
+                )
+
             try:
+                # parse_spec включает repair_json, который умеет закрывать
+                # оборванный JSON — поэтому даже усечённый ответ может пройти
                 return parse_spec(raw)
             except ValueError as e:
                 last_error = e
                 logger.warning("Парсинг неуспешен (попытка %d): %s", attempt + 1, e)
 
-                # Точечный фидбэк: показываем модели именно её ошибки
                 messages.append(response)
-                messages.append(HumanMessage(content=(
-                    f"Твой предыдущий ответ невалиден. Конкретные ошибки:\n{e}\n\n"
-                    f"Исправь ИМЕННО эти поля и верни полный JSON заново. "
-                    f"Только сырой JSON, начинающийся с {{ и заканчивающийся }}. "
-                    f"Без markdown-обёрток ```, без пояснений, без приветствий."
-                )))
+                if was_truncated:
+                    # Ответ не влез — просим сделать КОРОЧЕ, а не «исправь поля»
+                    messages.append(HumanMessage(content=(
+                        "Твой ответ оборвался — не уместился в лимит. "
+                        "Сделай дайджест КОМПАКТНЕЕ: меньше тем (только самые важные), "
+                        "короче цитаты и описания. Цель — уложиться в полный валидный "
+                        "JSON. Верни только сырой JSON от { до }, без markdown."
+                    )))
+                else:
+                    # Точечный фидбэк по ошибкам валидации
+                    messages.append(HumanMessage(content=(
+                        f"Твой предыдущий ответ невалиден. Конкретные ошибки:\n{e}\n\n"
+                        f"Исправь ИМЕННО эти поля и верни полный JSON заново. "
+                        f"Только сырой JSON, начинающийся с {{ и заканчивающийся }}. "
+                        f"Без markdown-обёрток, без пояснений, без приветствий."
+                    )))
 
         raise RuntimeError(
             f"LLM не смог вернуть валидный JSON за {self.max_retries + 1} попыток. "
-            f"Последняя ошибка:\n{last_error}"
+            f"Последняя ошибка:\n{last_error}\n\n"
+            f"ПОДСКАЗКА: если в логах есть 'оборван по лимиту токенов' — увеличь "
+            f"max_tokens при создании модели (GigaChat(..., max_tokens=8000))."
         )
+
+    @staticmethod
+    def _is_truncated(response: Any) -> bool:
+        """
+        Определяет, оборван ли ответ по лимиту токенов.
+
+        Разные обёртки кладут finish_reason в разные места —
+        проверяем известные варианты.
+        """
+        # 1. response_metadata (langchain-стандарт)
+        meta = getattr(response, "response_metadata", None) or {}
+        finish = meta.get("finish_reason") or meta.get("stop_reason")
+        if finish and str(finish).lower() == "length":
+            return True
+
+        # 2. additional_kwargs
+        extra = getattr(response, "additional_kwargs", None) or {}
+        finish2 = extra.get("finish_reason")
+        if finish2 and str(finish2).lower() == "length":
+            return True
+
+        # 3. эвристика: ответ есть, но JSON не закрыт балансом скобок
+        content = response.content if hasattr(response, "content") else ""
+        if isinstance(content, str) and content.strip():
+            opens = content.count("{") + content.count("[")
+            closes = content.count("}") + content.count("]")
+            if opens > closes:  # явный дисбаланс — вероятно обрыв
+                return True
+
+        return False
 
     async def _arun(self, *args: Any, **kwargs: Any) -> str:
         # Простая async-обёртка через invoke; для production стоит сделать

@@ -27,6 +27,7 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
+from .icons import draw_icon, has_icon
 from .schemas import (
     AttentionSlide,
     ClosingSlide,
@@ -311,6 +312,9 @@ class DigestBuilder:
         col_period_left = left + width - inner_pad_x - col_mentions_width - col_period_width - Inches(0.1)
         col_mentions_left = left + width - inner_pad_x - col_mentions_width
 
+        # Максимум упоминаний — для нормировки мини-баров
+        max_mentions = max((it.mentions for it in items), default=0) or 1
+
         for i, item in enumerate(items):
             row_top = top + inner_pad_y + row_height * i
 
@@ -387,6 +391,31 @@ class DigestBuilder:
                 size=10, color=self.palette.text_muted,
                 align=PP_ALIGN.RIGHT,
             )
+
+            # Мини-бар под числом упоминаний — визуализация относительного веса.
+            # Длина пропорциональна mentions / max_mentions.
+            bar_full_width = col_mentions_width
+            bar_ratio = item.mentions / max_mentions
+            bar_width = Emu(max(int(bar_full_width * bar_ratio), Inches(0.1)))
+            bar_top = row_top + Inches(0.72)
+            # Фоновая дорожка (бледная)
+            track = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                col_mentions_left, bar_top, bar_full_width, Inches(0.07),
+            )
+            track.adjustments[0] = 0.5
+            self._fill_solid(track, self.palette.text_muted)
+            track.line.fill.background()
+            track.fill.fore_color.rgb = self._rgb(self.palette.text_muted)
+            # Заполнение (акцентный цвет), выровнено по правому краю
+            fill_bar = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                col_mentions_left + bar_full_width - bar_width, bar_top,
+                bar_width, Inches(0.07),
+            )
+            fill_bar.adjustments[0] = 0.5
+            self._fill_solid(fill_bar, self.palette.accent)
+            fill_bar.line.fill.background()
 
             # Разделитель между строками (кроме последней)
             if i < n - 1:
@@ -768,6 +797,19 @@ class DigestBuilder:
         if border_color:
             card.line.color.rgb = self._rgb(border_color)
             card.line.width = Pt(1.0)
+
+        # Иконка в правом верхнем углу (если задан icon_hint)
+        icon_hint = getattr(kpi, "icon_hint", None)
+        if icon_hint and has_icon(icon_hint):
+            icon_size = Inches(0.28)
+            icon_color = value_color if card_bg else self.palette.accent
+            draw_icon(
+                slide, icon_hint,
+                left=left + width - icon_size - Inches(0.18),
+                top=top + Inches(0.16),
+                size=icon_size,
+                color=icon_color,
+            )
 
         # Значение
         self._add_text(
