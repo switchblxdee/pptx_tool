@@ -228,28 +228,40 @@ class GenerateDigestTool(BaseTool):
         """
         Заменяет палитру в спеке на детектированную по style_prompt.
 
-        Если в промпте есть ключевые слова темы ('тёмное', 'корпоративный',
-        'яркий' и т.п.) — берём готовую палитру-пресет. Если ключевых слов
-        нет — оставляем палитру, которую сгенерил LLM (не трогаем).
+        Применяется ЖЁСТКО: пересобираем DigestStyle и присваиваем напрямую,
+        чтобы исключить тихие промахи model_copy. Ошибки логируются явно
+        (не глотаются), чтобы было видно, если пресет не применился.
         """
         preset = detect_theme(style_prompt)
         if preset is None:
-            # Пользователь не указал узнаваемый стиль — доверяем LLM
+            logger.info(
+                "В запросе нет узнаваемых ключевых слов стиля — палитра от LLM сохранена"
+            )
             return spec
 
-        palette_dict = dict(preset.palette)
+        # Строим новую палитру из пресета
+        new_palette = ColorPalette(**dict(preset.palette))
+
+        # Прямое присваивание поля палитры внутри style.
+        # Pydantic по умолчанию запрещает мутацию, поэтому пересобираем style.
         try:
-            new_palette = ColorPalette(**palette_dict)
-        except Exception as e:
-            logger.warning("Не удалось применить пресет '%s': %s", preset.name, e)
-            return spec
+            new_style = DigestStyle(
+                palette=new_palette,
+                typography=spec.style.typography,
+            )
+            updated = spec.model_copy(update={"style": new_style})
+        except Exception:
+            # Если model_copy почему-то не сработал — пересобираем весь spec
+            logger.exception("model_copy не сработал, пересобираю spec целиком")
+            data = spec.model_dump()
+            data["style"]["palette"] = dict(preset.palette)
+            updated = DigestSpec.model_validate(data)
 
-        new_style = spec.style.model_copy(update={"palette": new_palette})
         logger.info(
-            "Применена палитра-пресет '%s' по запросу пользователя",
-            preset.name,
+            "✔ Применена палитра-пресет '%s' (фон #%s) по запросу пользователя",
+            preset.name, preset.palette["gradient_start"],
         )
-        return spec.model_copy(update={"style": new_style})
+        return updated
 
     @staticmethod
     def _enforce_topic_count(spec: DigestSpec, target: int) -> DigestSpec:
@@ -388,13 +400,22 @@ class GenerateDigestTool(BaseTool):
             output_path = str(input_path.with_suffix(".pptx"))
 
         # 4. Собираем .pptx
+        actual_bg = spec.style.palette.gradient_start
         logger.info(
-            "Собираю дайджест: обложка + %d тем → %s",
-            len(spec.topics), output_path,
+            "Собираю дайджест: обложка + %d тем, фон #%s → %s",
+            len(spec.topics), actual_bg, output_path,
         )
         result_path = DigestBuilder(spec).build(output_path)
 
-        return str(result_path)
+        # Возвращаем путь + краткую диагностику, чтобы было видно,
+        # какой стиль/число слайдов реально применились.
+        detected = detect_theme(style_prompt)
+        theme_note = detected.name if detected else "палитра от модели"
+        return (
+            f"{result_path}\n"
+            f"[диагностика] тема: {theme_note}, фон: #{actual_bg}, "
+            f"тем-слайдов: {len(spec.topics)}, графиков: {len(spec.charts)}"
+        )
 
     def _call_llm_with_retries(
         self, data_context, style_prompt: str
