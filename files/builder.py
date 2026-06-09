@@ -21,7 +21,9 @@ from typing import List, Optional, Tuple
 
 from lxml import etree
 from pptx import Presentation
+from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
+from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
@@ -30,6 +32,7 @@ from pptx.util import Emu, Inches, Pt
 from .icons import draw_icon, has_icon
 from .schemas import (
     AttentionSlide,
+    ChartSlide,
     ClosingSlide,
     CoverSlide,
     DigestSpec,
@@ -86,6 +89,7 @@ class DigestBuilder:
         if self.spec.executive_summary:
             total += 1
         total += len(self.spec.topics)
+        total += len(self.spec.charts)
         if self.spec.patterns:
             total += 1
         if self.spec.attention:
@@ -114,7 +118,14 @@ class DigestBuilder:
             self._render_topic(slide, topic)
             self._render_meta_footer(slide, page_number=page, total=total)
 
-        # 4. Сквозные паттерны
+        # 4. Слайды-графики (после тем)
+        for chart in self.spec.charts:
+            page += 1
+            slide = self._new_slide()
+            self._render_chart(slide, chart)
+            self._render_meta_footer(slide, page_number=page, total=total)
+
+        # 5. Сквозные паттерны
         if self.spec.patterns:
             page += 1
             slide = self._new_slide()
@@ -745,6 +756,186 @@ class DigestBuilder:
                 card_bg=self.palette.kpi_bg,
                 border_color=None,
             )
+
+    # ----------------------------------------------------------------------- #
+    # СЛАЙД-ГРАФИК (нативный pptx-чарт)
+    # ----------------------------------------------------------------------- #
+
+    # Маппинг наших типов в pptx-типы
+    _CHART_TYPE_MAP = {
+        "column": XL_CHART_TYPE.COLUMN_CLUSTERED,
+        "bar": XL_CHART_TYPE.BAR_CLUSTERED,
+        "line": XL_CHART_TYPE.LINE_MARKERS,
+        "pie": XL_CHART_TYPE.PIE,
+    }
+
+    def _render_chart(self, slide, s: ChartSlide) -> None:
+        """
+        Рендерит слайд с НАТИВНЫМ PowerPoint-графиком.
+
+        График — это редактируемый объект pptx (не картинка), цвета берутся
+        из палитры дайджеста. matplotlib не используется.
+        """
+        self._render_slide_title(slide, s.title)
+
+        # Подзаголовок
+        chart_top = Inches(1.7)
+        if s.subtitle:
+            self._add_text(
+                slide, s.subtitle,
+                left=MARGIN_X, top=Inches(1.55),
+                width=SLIDE_WIDTH - MARGIN_X * 2, height=Inches(0.5),
+                font=self.style.typography.body_font,
+                size=14, color=self.palette.text_muted,
+            )
+            chart_top = Inches(2.15)
+
+        # Готовим данные
+        chart_data = CategoryChartData()
+        chart_data.categories = s.categories
+        chart_data.add_series(s.value_label, s.values)
+
+        # Зона графика. Если есть insight — оставляем место снизу.
+        chart_height = Inches(3.9) if s.insight else Inches(4.5)
+        chart_width = SLIDE_WIDTH - MARGIN_X * 2
+
+        xl_type = self._CHART_TYPE_MAP.get(s.chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+
+        graphic_frame = slide.shapes.add_chart(
+            xl_type, MARGIN_X, chart_top, chart_width, chart_height, chart_data,
+        )
+        chart = graphic_frame.chart
+
+        self._style_chart(chart, s)
+
+        # Аналитический вывод под графиком
+        if s.insight:
+            insight_top = chart_top + chart_height + Inches(0.1)
+            # Плашка с выводом
+            card = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                MARGIN_X, insight_top,
+                SLIDE_WIDTH - MARGIN_X * 2, Inches(0.7),
+            )
+            card.adjustments[0] = 0.12
+            self._fill_solid(card, self.palette.card_bg)
+            card.line.fill.background()
+            self._apply_subtle_shadow(card)
+
+            self._add_text(
+                slide, s.insight,
+                left=MARGIN_X + Inches(0.35), top=insight_top + Inches(0.05),
+                width=SLIDE_WIDTH - MARGIN_X * 2 - Inches(0.7), height=Inches(0.6),
+                font=self.style.typography.body_font,
+                size=13, color=self.palette.text_dark,
+                anchor=MSO_ANCHOR.MIDDLE,
+            )
+
+    def _style_chart(self, chart, s: ChartSlide) -> None:
+        """Применяет палитру дайджеста и базовое оформление к графику."""
+        chart.has_title = False
+
+        # Легенду показываем только для pie (там она осмысленна)
+        if s.chart_type == "pie":
+            chart.has_legend = True
+            chart.legend.position = XL_LEGEND_POSITION.RIGHT
+            chart.legend.include_in_layout = False
+            try:
+                chart.legend.font.size = Pt(11)
+                chart.legend.font.name = self.style.typography.body_font
+                chart.legend.font.color.rgb = self._rgb(self.palette.text_dark)
+            except Exception:
+                pass
+        else:
+            chart.has_legend = False
+
+        plot = chart.plots[0]
+
+        # Палитра для точек: accent + вариации. Для pie каждый сектор свой цвет.
+        palette_cycle = [
+            self.palette.accent,
+            self.palette.badge,
+            self.palette.text_muted,
+            self.palette.gradient_start,
+            self.palette.gradient_end,
+        ]
+
+        series = plot.series[0]
+
+        if s.chart_type == "pie":
+            # Каждый сектор — свой цвет через прямой XML
+            self._color_pie_points(series, len(s.categories), palette_cycle)
+            plot.has_data_labels = True
+            dl = plot.data_labels
+            dl.show_percentage = True
+            dl.show_value = False
+            dl.number_format = "0%"
+            dl.number_format_is_linked = False
+            try:
+                dl.font.size = Pt(11)
+                dl.font.color.rgb = self._rgb(self.palette.text_dark)
+                dl.font.bold = True
+            except Exception:
+                pass
+        else:
+            # bar/column/line — единый акцентный цвет серии
+            fmt = series.format
+            fmt.fill.solid()
+            fmt.fill.fore_color.rgb = self._rgb(self.palette.accent)
+            if s.chart_type == "line":
+                fmt.line.color.rgb = self._rgb(self.palette.accent)
+                fmt.line.width = Pt(2.5)
+
+            # Подписи значений на столбцах/точках
+            plot.has_data_labels = True
+            dl = plot.data_labels
+            dl.show_value = True
+            try:
+                dl.font.size = Pt(11)
+                dl.font.bold = True
+                dl.font.color.rgb = self._rgb(self.palette.text_dark)
+                if s.chart_type in ("column", "bar"):
+                    dl.position = XL_LABEL_POSITION.OUTSIDE_END
+            except Exception:
+                pass
+
+            # Оформление осей
+            try:
+                cat_ax = chart.category_axis
+                cat_ax.tick_labels.font.size = Pt(11)
+                cat_ax.tick_labels.font.name = self.style.typography.body_font
+                cat_ax.tick_labels.font.color.rgb = self._rgb(self.palette.text_dark)
+            except Exception:
+                pass
+            try:
+                val_ax = chart.value_axis
+                val_ax.tick_labels.font.size = Pt(10)
+                val_ax.tick_labels.font.color.rgb = self._rgb(self.palette.text_muted)
+                val_ax.has_major_gridlines = True
+            except Exception:
+                pass
+
+    def _color_pie_points(self, series, n_points: int, palette_cycle) -> None:
+        """Красит каждый сектор pie в свой цвет (прямой XML-патч dPt)."""
+        series_xml = series._element
+        # Точка вставки — после служебных элементов
+        insert_tags = {qn(t) for t in ("c:idx", "c:order", "c:tx", "c:spPr")}
+        insert_idx = 0
+        for i, child in enumerate(series_xml):
+            if child.tag in insert_tags:
+                insert_idx = i + 1
+
+        for i in range(n_points):
+            color = palette_cycle[i % len(palette_cycle)].lstrip("#")
+            dpt_xml = (
+                f'<c:dPt xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" '
+                f'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+                f'<c:idx val="{i}"/><c:bubble3D val="0"/>'
+                f'<c:spPr><a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+                f'<a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln>'
+                f'</c:spPr></c:dPt>'
+            )
+            series_xml.insert(insert_idx + i, etree.fromstring(dpt_xml))
 
     # ----------------------------------------------------------------------- #
     # KPI карточки (одинаковая логика для cover и topic)

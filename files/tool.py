@@ -299,6 +299,43 @@ class GenerateDigestTool(BaseTool):
         )
         return spec
 
+    @staticmethod
+    def _extract_slide_count(style_prompt: str) -> Optional[int]:
+        """
+        Извлекает желаемое число слайдов из текста запроса.
+
+        Ловит формулировки: «15 слайдов», «сделай 10 слайдов»,
+        «презентация на 12 слайдов», «8 тем».
+
+        Тонкость: пользователь обычно считает ВЕСЬ дайджест, а target в
+        _enforce_topic_count — это только topic-слайды. Дайджест содержит
+        служебные слайды (обложка + до 4 аналитических). Поэтому если
+        пользователь сказал про «слайды» — вычитаем служебные. Если про
+        «темы» — берём число как есть.
+        """
+        import re
+
+        text = style_prompt.lower()
+
+        # Сколько служебных слайдов в дайджесте (cover + 4 аналитических)
+        SERVICE_SLIDES = 5
+
+        # «N тем» / «N тема(-ы)» → это прямо число topic-слайдов
+        m = re.search(r"(\d+)\s+тем", text)
+        if m:
+            n = int(m.group(1))
+            return max(1, n)
+
+        # «N слайдов» / «на N слайдов» / «N слайда» → весь дайджест
+        m = re.search(r"(\d+)\s+слайд", text)
+        if m:
+            n = int(m.group(1))
+            # Вычитаем служебные, но не меньше 1 темы
+            topics = n - SERVICE_SLIDES
+            return max(1, topics)
+
+        return None
+
     def _generate(
         self,
         xlsx_path: str,
@@ -326,8 +363,17 @@ class GenerateDigestTool(BaseTool):
 
         # 2.5. ПРИНУДИТЕЛЬНО приводим число тем к запрошенному.
         # Модели плохо считают — поэтому не доверяем, а контролируем сами.
-        if slide_count is not None:
-            spec = self._enforce_topic_count(spec, slide_count)
+        # Источник числа: либо явный параметр slide_count, либо число,
+        # извлечённое из текста style_prompt ("сделай 15 слайдов").
+        target_count = slide_count
+        if target_count is None:
+            target_count = self._extract_slide_count(style_prompt)
+            if target_count is not None:
+                logger.info(
+                    "Число слайдов %d извлечено из текста запроса", target_count
+                )
+        if target_count is not None:
+            spec = self._enforce_topic_count(spec, target_count)
 
         # 2.6. ПРИНУДИТЕЛЬНО применяем палитру по стилю из запроса.
         # LLM плохо слушает указания про цвета («тёмное оформление») и копирует

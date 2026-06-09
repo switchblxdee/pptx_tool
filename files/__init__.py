@@ -10,9 +10,11 @@ pptx_generator — LangChain-инструмент для генерации да
 from .builder import DigestBuilder
 from .excel_reader import DataContext, ExcelReader
 from .json_repair import repair_json
+from .themes import detect_theme, resolve_palette, available_themes, THEME_PRESETS
 from .schemas import (
     AttentionItem,
     AttentionSlide,
+    ChartSlide,
     ClosingSlide,
     ColorPalette,
     CoverSlide,
@@ -65,7 +67,11 @@ __all__ = [
     "AttentionSlide",
     "AttentionItem",
     "ClosingSlide",
+    "ChartSlide",
     # JSON repair (полезно для отладки)
     "repair_json",
+    "detect_theme",
+    "resolve_palette",
+    "available_themes",
 ]
 __version__ = "0.2.0"

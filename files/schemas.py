@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -196,6 +196,76 @@ class TopicSlide(BaseModel):
 # Аналитические слайды (executive summary, паттерны, риски, итоги)
 # --------------------------------------------------------------------------- #
 
+class ChartSlide(BaseModel):
+    """
+    Слайд с графиком (нативный PowerPoint-чарт, не картинка).
+
+    Используется для визуального сравнения тем/продуктов: например,
+    распределение сигналов, динамика по неделям, структура категорий.
+    """
+    title: str = Field(max_length=60, description="Заголовок слайда")
+    chart_type: str = Field(
+        default="column",
+        description="Тип графика: 'column' (вертикальные столбцы), 'bar' "
+                    "(горизонтальные), 'line' (динамика), 'pie' (структура)"
+    )
+    subtitle: Optional[str] = Field(
+        default=None, max_length=160,
+        description="Подзаголовок/пояснение под заголовком"
+    )
+    categories: List[str] = Field(
+        min_length=2, max_length=15,
+        description="Подписи по оси категорий (названия тем, недели и т.п.)"
+    )
+    values: List[float] = Field(
+        min_length=2, max_length=15,
+        description="Числовые значения, по одному на каждую категорию"
+    )
+    value_label: str = Field(
+        default="Значение", max_length=30,
+        description="Что измеряем (для легенды/оси), напр. 'Сигналов'"
+    )
+    insight: Optional[str] = Field(
+        default=None, max_length=200,
+        description="Краткий аналитический вывод по графику (наблюдение)"
+    )
+
+    @field_validator("chart_type")
+    @classmethod
+    def normalize_chart_type(cls, v: str) -> str:
+        v = v.lower().strip()
+        aliases = {
+            "columns": "column", "vertical": "column", "столбчатый": "column",
+            "bars": "bar", "horizontal": "bar", "горизонтальный": "bar",
+            "lines": "line", "линейный": "line", "динамика": "line",
+            "pie": "pie", "круговой": "pie", "doughnut": "pie",
+        }
+        v = aliases.get(v, v)
+        if v not in ("column", "bar", "line", "pie"):
+            return "column"
+        return v
+
+    @field_validator("categories")
+    @classmethod
+    def trim_categories(cls, v: List[str]) -> List[str]:
+        return [str(c)[:30].rstrip() for c in v]
+
+    @model_validator(mode="after")
+    def check_lengths_match(self) -> "ChartSlide":
+        """categories и values должны быть одной длины."""
+        if len(self.categories) != len(self.values):
+            n = min(len(self.categories), len(self.values))
+            if n < 2:
+                raise ValueError(
+                    "ChartSlide: categories и values должны иметь по 2+ "
+                    "совпадающих элемента"
+                )
+            # Обрезаем до общей длины, чтобы не падать
+            object.__setattr__(self, "categories", self.categories[:n])
+            object.__setattr__(self, "values", self.values[:n])
+        return self
+
+
 class SummaryPoint(BaseModel):
     """Один пункт executive summary — с акцентом на главную мысль."""
     headline: str = Field(max_length=80, description="Главная мысль одной фразой")
@@ -307,9 +377,10 @@ class DigestSpec(BaseModel):
         1. cover (обложка)
         2. executive_summary (если есть)
         3. topics[] (детальные слайды по темам)
-        4. patterns (если есть)
-        5. attention (если есть)
-        6. closing (если есть)
+        4. charts[] (слайды-графики, если есть)
+        5. patterns (если есть)
+        6. attention (если есть)
+        7. closing (если есть)
 
     Это то, что возвращает LLM и принимает на вход DigestBuilder.
     """
@@ -323,6 +394,11 @@ class DigestSpec(BaseModel):
     topics: List[TopicSlide] = Field(
         min_length=1, max_length=25,
         description="Темы для детальных слайдов"
+    )
+    charts: List[ChartSlide] = Field(
+        default_factory=list, max_length=4,
+        description="Слайды-графики (нативные pptx-чарты): сравнение тем, "
+                    "динамика, структура. Идут после тем, перед паттернами."
     )
     patterns: Optional[PatternsSlide] = Field(
         default=None,
