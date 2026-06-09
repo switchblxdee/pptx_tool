@@ -34,7 +34,7 @@ from .prompts import (
     data_only_user_prompt,
     system_prompt,
 )
-from .schemas import ColorPalette, DigestSpec
+from .schemas import ColorPalette, DigestSpec, DigestStyle
 from .themes import detect_theme, resolve_palette
 
 
