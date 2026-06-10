@@ -160,13 +160,17 @@ class DigestBuilder:
     # ----------------------------------------------------------------------- #
 
     def _render_cover(self, slide, cover: CoverSlide) -> None:
+        # Цвета текста, лежащего прямо на градиенте — контрастные к фону
+        on_bg = self._text_on_background()
+        on_bg_muted = self._muted_on_background()
+
         # Заголовок («Голос IT»)
         self._add_text(
             slide, cover.title,
             left=Inches(0.8), top=Inches(2.0),
             width=Inches(11.5), height=Inches(0.9),
             font=self.style.typography.heading_font,
-            size=44, bold=True, color=self.palette.text_dark,
+            size=44, bold=True, color=on_bg,
         )
 
         # Подзаголовок («дайджест для руководства Блока T»)
@@ -175,7 +179,7 @@ class DigestBuilder:
             left=Inches(0.8), top=Inches(2.85),
             width=Inches(11.5), height=Inches(0.9),
             font=self.style.typography.heading_font,
-            size=32, bold=True, color=self.palette.text_dark,
+            size=32, bold=True, color=on_bg,
         )
 
         # Описание (мелким текстом)
@@ -185,7 +189,7 @@ class DigestBuilder:
                 left=Inches(0.8), top=Inches(3.85),
                 width=Inches(11.5), height=Inches(0.7),
                 font=self.style.typography.body_font,
-                size=14, color=self.palette.text_muted,
+                size=14, color=on_bg_muted,
             )
 
         # Pill-метки источников
@@ -235,7 +239,7 @@ class DigestBuilder:
             left=title_box_left, top=title_box_top,
             width=title_box_width, height=title_box_height,
             font=self.style.typography.heading_font,
-            size=title_size, bold=True, color=self.palette.text_dark,
+            size=title_size, bold=True, color=self._text_on_background(),
             anchor=MSO_ANCHOR.MIDDLE,
         )
 
@@ -246,6 +250,8 @@ class DigestBuilder:
         n_kpi = len(topic.kpis)
         kpi_card_width = Emu(int((kpi_total_width - kpi_gap * (n_kpi - 1)) / n_kpi))
 
+        on_bg = self._text_on_background()
+        on_bg_muted = self._muted_on_background()
         for i, kpi in enumerate(topic.kpis):
             left = kpi_left_start + (kpi_card_width + kpi_gap) * i
             self._render_kpi_card(
@@ -254,10 +260,10 @@ class DigestBuilder:
                 width=kpi_card_width, height=Inches(1.5),
                 value_size=28,
                 label_size=10,
-                value_color=self.palette.text_dark,
-                label_color=self.palette.text_muted,
-                card_bg=None,                       # прозрачный (на градиенте)
-                border_color=self.palette.text_dark,  # с обводкой
+                value_color=on_bg,
+                label_color=on_bg_muted,
+                card_bg=None,                # прозрачный (на градиенте)
+                border_color=on_bg,          # обводка контрастна фону
             )
 
         # Карточка-список тем (пастельный фон)
@@ -277,7 +283,7 @@ class DigestBuilder:
                 left=MARGIN_X, top=Inches(6.4),
                 width=Inches(1.2), height=Inches(0.3),
                 font=self.style.typography.body_font,
-                size=11, color=self.palette.text_muted,
+                size=11, color=self._muted_on_background(),
                 anchor=MSO_ANCHOR.MIDDLE,
             )
             self._render_pills_row(
@@ -482,7 +488,7 @@ class DigestBuilder:
             left=Inches(0.85), top=Inches(0.6),
             width=Inches(11.5), height=Inches(0.8),
             font=self.style.typography.heading_font,
-            size=32, bold=True, color=self.palette.text_dark,
+            size=32, bold=True, color=self._text_on_background(),
             anchor=MSO_ANCHOR.MIDDLE,
         )
 
@@ -1102,7 +1108,7 @@ class DigestBuilder:
             left=pill_left, top=META_HEADER_TOP,
             width=pill_width, height=META_HEADER_HEIGHT,
             font=self.style.typography.body_font,
-            size=11, color=self.palette.text_dark,
+            size=11, color=self._muted_on_background(),
             align=PP_ALIGN.RIGHT,
             anchor=MSO_ANCHOR.MIDDLE,
         )
@@ -1124,7 +1130,7 @@ class DigestBuilder:
             width=SLIDE_WIDTH - MARGIN_X * 2 - Inches(0.7),
             height=FOOTER_HEIGHT,
             font=self.style.typography.body_font,
-            size=9, color=self.palette.text_muted,
+            size=9, color=self._muted_on_background(),
             anchor=MSO_ANCHOR.MIDDLE,
         )
 
@@ -1135,7 +1141,7 @@ class DigestBuilder:
             top=SLIDE_HEIGHT - FOOTER_BOTTOM - FOOTER_HEIGHT,
             width=Inches(0.7), height=FOOTER_HEIGHT,
             font=self.style.typography.body_font,
-            size=9, color=self.palette.text_muted,
+            size=9, color=self._muted_on_background(),
             align=PP_ALIGN.RIGHT,
             anchor=MSO_ANCHOR.MIDDLE,
         )
@@ -1237,3 +1243,47 @@ class DigestBuilder:
     @staticmethod
     def _rgb(hex_color: str) -> RGBColor:
         return RGBColor.from_string(hex_color.lstrip("#"))
+
+    @staticmethod
+    def _luminance(hex_color: str) -> float:
+        """
+        Относительная яркость цвета (0=чёрный, 1=белый).
+
+        Нужна, чтобы выбирать контрастный цвет текста на любом фоне
+        независимо от темы. Формула — взвешенная по восприятию (sRGB).
+        """
+        h = hex_color.lstrip("#")
+        if len(h) != 6:
+            return 0.5
+        r, g, b = (int(h[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    def _text_on_background(self) -> str:
+        """
+        Контрастный цвет текста для элементов поверх ГРАДИЕНТА фона.
+
+        На обложке и аналитических заголовках текст лежит прямо на
+        градиенте, а не на карточке. text_dark из палитры может с ним
+        сливаться (тёмный текст на тёмном фоне). Поэтому выбираем
+        белый/тёмный по яркости фона.
+        """
+        # Средняя яркость градиента
+        lum = (self._luminance(self.palette.gradient_start) +
+               self._luminance(self.palette.gradient_end)) / 2
+        # Тёмный фон → светлый текст, и наоборот
+        if lum < 0.5:
+            # Если в палитре text_dark уже светлый — берём его (он «основной»),
+            # иначе белый
+            return self.palette.text_dark if self._luminance(self.palette.text_dark) > 0.6 else "FFFFFF"
+        else:
+            return self.palette.text_dark if self._luminance(self.palette.text_dark) < 0.5 else "1A1A1A"
+
+    def _muted_on_background(self) -> str:
+        """Контрастный приглушённый цвет для подзаголовков на градиенте."""
+        lum = (self._luminance(self.palette.gradient_start) +
+               self._luminance(self.palette.gradient_end)) / 2
+        if lum < 0.5:
+            # На тёмном — text_muted, если он достаточно светлый, иначе светло-серый
+            return self.palette.text_muted if self._luminance(self.palette.text_muted) > 0.45 else "C8CCD8"
+        else:
+            return self.palette.text_muted if self._luminance(self.palette.text_muted) < 0.6 else "6B7280"

@@ -35,7 +35,7 @@ from .prompts import (
     system_prompt,
 )
 from .schemas import ColorPalette, DigestSpec, DigestStyle
-from .themes import detect_theme, resolve_palette
+from .themes import detect_theme, get_theme_by_name, resolve_palette
 
 
 logger = logging.getLogger(__name__)
@@ -55,9 +55,24 @@ class GenerateDigestInput(BaseModel):
     )
     style_prompt: str = Field(
         description=(
-            "Описание желаемого стиля и содержания дайджеста на естественном языке. "
-            "Например: 'Корпоративный дайджест в пастельной палитре для топ-менеджмента'."
+            "ДОСЛОВНЫЙ текст пожеланий пользователя по стилю и оформлению. "
+            "ВАЖНО: передавай сюда исходные слова пользователя про внешний вид "
+            "БЕЗ изменений — особенно про цвета и тему ('тёмный фон', 'тёмная', "
+            "'яркая', 'корпоративная' и т.п.). Эти слова управляют палитрой. "
+            "Если пользователь сказал 'сделай тёмную презентацию' — передай "
+            "именно 'сделай тёмную презентацию', не перефразируй."
         )
+    )
+    force_theme: Optional[str] = Field(
+        default=None,
+        description=(
+            "Явное название темы оформления, ПЕРЕОПРЕДЕЛЯЕТ автодетект по тексту. "
+            "Используй, когда точно знаешь нужную тему. Доступно: 'black' "
+            "(чёрный фон), 'dark' (тёмный графит), 'dark_emerald', "
+            "'navy_corporate', 'vibrant' (яркая), 'ocean', 'warm', "
+            "'minimal_mono', 'default_teal_peach'. Если пользователь просит "
+            "тёмное/чёрное оформление — ставь 'black' или 'dark'."
+        ),
     )
     output_path: Optional[str] = Field(
         default=None,
@@ -202,6 +217,21 @@ class GenerateDigestTool(BaseTool):
             "цвета модели."
         ),
     )
+    force_theme: Optional[str] = Field(
+        default=None,
+        description=(
+            "ЖЁСТКО задать тему в обход детекции из текста. Полезно, если "
+            "агент (LangGraph) переформулирует запрос и теряет ключевые слова "
+            "про стиль. Доступные темы: "
+            "тёмные — 'black', 'dark', 'dark_emerald', 'dark_purple', 'midnight_blue'; "
+            "деловые — 'navy_corporate', 'slate_pro', 'burgundy_lux'; "
+            "яркие — 'vibrant', 'coral_pop', 'lime_fresh'; "
+            "холодные — 'ocean', 'mint', 'lavender'; "
+            "тёплые — 'warm', 'terracotta', 'cream_beige'; "
+            "нейтральные — 'minimal_mono', 'light_clean', 'default_teal_peach'. "
+            "Если задано — применяется именно эта тема, текст игнорируется."
+        ),
+    )
 
     def _run(
         self,
@@ -210,13 +240,14 @@ class GenerateDigestTool(BaseTool):
         output_path: Optional[str] = None,
         slide_count: Optional[int] = None,
         grouping_column: Optional[str] = None,
+        force_theme: Optional[str] = None,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         """Синхронный запуск."""
         try:
             return self._generate(
                 xlsx_path, style_prompt, output_path,
-                slide_count, grouping_column,
+                slide_count, grouping_column, force_theme,
             )
         except Exception as e:
             logger.exception("Ошибка при генерации дайджеста")
@@ -224,26 +255,42 @@ class GenerateDigestTool(BaseTool):
             return f"ОШИБКА: {type(e).__name__}: {e}"
 
     @staticmethod
-    def _apply_detected_palette(spec: DigestSpec, style_prompt: str) -> DigestSpec:
+    def _apply_detected_palette(
+        spec: DigestSpec, style_prompt: str, force_theme: Optional[str] = None,
+    ) -> DigestSpec:
         """
-        Заменяет палитру в спеке на детектированную по style_prompt.
+        Заменяет палитру в спеке на тему.
 
-        Применяется ЖЁСТКО: пересобираем DigestStyle и присваиваем напрямую,
-        чтобы исключить тихие промахи model_copy. Ошибки логируются явно
-        (не глотаются), чтобы было видно, если пресет не применился.
+        Приоритет:
+        1. force_theme — явно указанная тема (по имени), в обход текста.
+        2. detect_theme(style_prompt) — автодетект по ключевым словам.
+
+        Применяется ЖЁСТКО: пересобираем DigestStyle. Ошибки логируются явно.
         """
-        preset = detect_theme(style_prompt)
+        preset = None
+        if force_theme:
+            preset = get_theme_by_name(force_theme)
+            if preset:
+                logger.info("Тема задана явно через force_theme='%s'", force_theme)
+            else:
+                logger.warning(
+                    "force_theme='%s' не найдена среди пресетов, пробую автодетект",
+                    force_theme,
+                )
+        if preset is None:
+            preset = detect_theme(style_prompt)
+
         if preset is None:
             logger.info(
-                "В запросе нет узнаваемых ключевых слов стиля — палитра от LLM сохранена"
+                "Тема не определена (ни force_theme, ни ключевые слова) — "
+                "палитра от LLM сохранена. style_prompt был: %r",
+                style_prompt[:120],
             )
             return spec
 
         # Строим новую палитру из пресета
         new_palette = ColorPalette(**dict(preset.palette))
 
-        # Прямое присваивание поля палитры внутри style.
-        # Pydantic по умолчанию запрещает мутацию, поэтому пересобираем style.
         try:
             new_style = DigestStyle(
                 palette=new_palette,
@@ -251,14 +298,13 @@ class GenerateDigestTool(BaseTool):
             )
             updated = spec.model_copy(update={"style": new_style})
         except Exception:
-            # Если model_copy почему-то не сработал — пересобираем весь spec
             logger.exception("model_copy не сработал, пересобираю spec целиком")
             data = spec.model_dump()
             data["style"]["palette"] = dict(preset.palette)
             updated = DigestSpec.model_validate(data)
 
         logger.info(
-            "✔ Применена палитра-пресет '%s' (фон #%s) по запросу пользователя",
+            "✔ Применена палитра-пресет '%s' (фон #%s)",
             preset.name, preset.palette["gradient_start"],
         )
         return updated
@@ -355,6 +401,7 @@ class GenerateDigestTool(BaseTool):
         output_path: Optional[str],
         slide_count: Optional[int] = None,
         grouping_column: Optional[str] = None,
+        force_theme: Optional[str] = None,
     ) -> str:
         # 1. Читаем Excel с автопоиском группировки
         logger.info("Читаю Excel: %s", xlsx_path)
@@ -389,10 +436,10 @@ class GenerateDigestTool(BaseTool):
 
         # 2.6. ПРИНУДИТЕЛЬНО применяем палитру по стилю из запроса.
         # LLM плохо слушает указания про цвета («тёмное оформление») и копирует
-        # палитру из примера. Детектируем тему по ключевым словам и подставляем
-        # готовую палитру — так стиль пользователя применяется гарантированно.
-        if self.force_palette_from_style:
-            spec = self._apply_detected_palette(spec, style_prompt)
+        # палитру из примера. Детектируем тему по ключевым словам (или берём
+        # force_theme) и подставляем готовую палитру — гарантированно.
+        if self.force_palette_from_style or force_theme:
+            spec = self._apply_detected_palette(spec, style_prompt, force_theme)
 
         # 3. Определяем путь вывода
         if output_path is None:
