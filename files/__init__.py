@@ -74,4 +74,4 @@ __all__ = [
     "resolve_palette",
     "available_themes",
 ]
-__version__ = "0.5.0-dark-fix"
+__version__ = "0.4.0"

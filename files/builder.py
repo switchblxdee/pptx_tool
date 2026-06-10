@@ -266,9 +266,14 @@ class DigestBuilder:
                 border_color=on_bg,          # обводка контрастна фону
             )
 
-        # Карточка-список тем (пастельный фон)
+        # Карточка-список тем (пастельный фон).
+        # Высота АДАПТИВНАЯ: при 1-2 темах фиксированные 3.5" оставляли
+        # полупустую карточку. Теперь ~1.15" на тему + внутренние отступы,
+        # с минимумом 1.6" и максимумом 3.6".
         list_top = Inches(2.7)
-        list_height = Inches(3.5)
+        n_items = len(topic.items)
+        raw_height = 0.6 + n_items * 1.05
+        list_height = Inches(min(3.6, max(1.6, raw_height)))
         self._render_topic_items_card(
             slide, topic.items,
             left=MARGIN_X, top=list_top,
@@ -379,6 +384,7 @@ class DigestBuilder:
                     width=col_content_width, height=Inches(0.6),
                     font=self.style.typography.body_font,
                     size=11, italic=True, color=self.palette.text_muted,
+                    line_spacing=1.2,
                 )
 
             # Период (справа)
@@ -748,6 +754,7 @@ class DigestBuilder:
             font=self.style.typography.body_font,
             size=16, color=self.palette.text_dark,
             anchor=MSO_ANCHOR.MIDDLE,
+            line_spacing=1.3,
         )
 
         # Итоговые KPI, если есть
@@ -1201,8 +1208,13 @@ class DigestBuilder:
         bold: bool = False, italic: bool = False,
         align=PP_ALIGN.LEFT,
         anchor=MSO_ANCHOR.TOP,
+        line_spacing: float | None = None,
     ) -> None:
-        """Единая точка создания текстового бокса."""
+        """Единая точка создания текстового бокса.
+
+        line_spacing — множитель межстрочного интервала (1.0 = одинарный).
+        Для многострочных текстов 1.15-1.3 заметно улучшает читаемость.
+        """
         box = slide.shapes.add_textbox(left, top, width, height)
         tf = box.text_frame
         tf.word_wrap = True
@@ -1212,6 +1224,8 @@ class DigestBuilder:
         tf.text = text
         p = tf.paragraphs[0]
         p.alignment = align
+        if line_spacing:
+            p.line_spacing = line_spacing
         for run in p.runs:
             run.font.name = font
             run.font.size = Pt(size)
