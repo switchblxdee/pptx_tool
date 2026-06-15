@@ -56,6 +56,16 @@ class Typography(BaseModel):
 class DigestStyle(BaseModel):
     palette: ColorPalette
     typography: Typography = Field(default_factory=Typography)
+    locked_roles: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Роли палитры, заданные пользователем ЯВНО в промпте "
+            "(background/text/text_muted/accent/card/kpi/badge). Эти роли "
+            "билдер НЕ трогает авто-контрастом — рендерит ровно как задано, "
+            "даже если контраст низкий. Заполняется программно резолвером "
+            "стиля, не моделью."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

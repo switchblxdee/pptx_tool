@@ -77,10 +77,16 @@ class DigestBuilder:
     def __init__(self, spec: DigestSpec):
         self.spec = spec
         self.style = spec.style
+        # Роли, заданные пользователем явно — их авто-контраст не трогает.
+        self.locked = set(getattr(spec.style, "locked_roles", None) or [])
         self.palette = self._heal_palette(spec.style.palette)
         self.prs = Presentation()
         self.prs.slide_width = SLIDE_WIDTH
         self.prs.slide_height = SLIDE_HEIGHT
+
+    def _locked(self, *roles: str) -> bool:
+        """True, если любая из ролей зафиксирована пользователем."""
+        return any(r in self.locked for r in roles)
 
     # ----------------------------------------------------------------------- #
     # Самолечение палитры: гарантируем читаемость основного/приглушённого
@@ -90,8 +96,12 @@ class DigestBuilder:
 
     def _heal_palette(self, pal):
         surfaces = [pal.card_bg, pal.kpi_bg]
-        new_dark = self._heal_ink(pal.text_dark, surfaces, C.AA_NORMAL)
-        new_muted = self._heal_ink(pal.text_muted, surfaces, C.AA_LARGE)
+        # Зафиксированные пользователем роли не лечим — рендерим как задано.
+        new_dark = (C.to_hex(pal.text_dark, with_hash=False) if self._locked("text")
+                    else self._heal_ink(pal.text_dark, surfaces, C.AA_NORMAL))
+        new_muted = (C.to_hex(pal.text_muted, with_hash=False)
+                     if self._locked("text", "text_muted")
+                     else self._heal_ink(pal.text_muted, surfaces, C.AA_LARGE))
         try:
             # Pydantic v2 — не мутируем исходную спеку, делаем копию
             return pal.model_copy(update={"text_dark": new_dark,
@@ -938,39 +948,67 @@ class DigestBuilder:
             except Exception:
                 pass
         else:
-            # bar/column/line — единый акцентный цвет серии
+            # bar/column/line — единый акцентный цвет серии.
+            # Цвет столбцов считаем КОНТРАСТНЫМ к фону слайда: иначе при
+            # светлом акценте на светлом фоне столбцы сливаются и «исчезают»
+            # (как было на скрине в PowerPoint). Если акцент задан явно
+            # пользователем — оставляем его, но всё равно даём обводку.
+            bar_color = (self.palette.accent if self._locked("accent")
+                         else self._contrasting_fill(self.palette.accent, 3.0))
+            # Контур столбца — гарантирует видимость, даже если PowerPoint
+            # по какой-то причине проигнорирует заливку spPr.
+            outline = self._contrasting_fill(bar_color, 1.6)
+
             fmt = series.format
             fmt.fill.solid()
-            fmt.fill.fore_color.rgb = self._rgb(self.palette.accent)
+            fmt.fill.fore_color.rgb = self._rgb(bar_color)
             if s.chart_type == "line":
-                fmt.line.color.rgb = self._rgb(self.palette.accent)
+                fmt.line.color.rgb = self._rgb(bar_color)
                 fmt.line.width = Pt(2.5)
+            else:
+                fmt.line.color.rgb = self._rgb(outline)
+                fmt.line.width = Pt(1.25)
 
-            # Подписи значений на столбцах/точках
+            # Для одиночной серии выключаем авто-разноцветность: PowerPoint
+            # иначе может перекрасить/обнулить заливку через стиль чарта.
+            try:
+                plot.vary_by_categories = False
+            except Exception:
+                pass
+            # Толщина столбцов (меньше зазор — столбцы заметнее)
+            try:
+                if s.chart_type in ("column", "bar"):
+                    plot.gap_width = 60
+            except Exception:
+                pass
+
+            # Подписи значений на столбцах/точках — цвет контрастен фону
+            label_ink = self._chart_label_ink()
             plot.has_data_labels = True
             dl = plot.data_labels
             dl.show_value = True
             try:
                 dl.font.size = Pt(11)
                 dl.font.bold = True
-                dl.font.color.rgb = self._rgb(self.palette.text_dark)
+                dl.font.color.rgb = self._rgb(label_ink)
                 if s.chart_type in ("column", "bar"):
                     dl.position = XL_LABEL_POSITION.OUTSIDE_END
             except Exception:
                 pass
 
-            # Оформление осей
+            # Оформление осей — тоже контрастно фону
+            axis_ink = self._chart_label_ink()
             try:
                 cat_ax = chart.category_axis
                 cat_ax.tick_labels.font.size = Pt(11)
                 cat_ax.tick_labels.font.name = self.style.typography.body_font
-                cat_ax.tick_labels.font.color.rgb = self._rgb(self.palette.text_dark)
+                cat_ax.tick_labels.font.color.rgb = self._rgb(axis_ink)
             except Exception:
                 pass
             try:
                 val_ax = chart.value_axis
                 val_ax.tick_labels.font.size = Pt(10)
-                val_ax.tick_labels.font.color.rgb = self._rgb(self.palette.text_muted)
+                val_ax.tick_labels.font.color.rgb = self._rgb(axis_ink)
                 val_ax.has_major_gridlines = True
             except Exception:
                 pass
@@ -1215,6 +1253,29 @@ class DigestBuilder:
     # Градиентный фон (прямой XML)
     # ----------------------------------------------------------------------- #
 
+    def _contrasting_fill(self, color: str, min_ratio: float = 3.0) -> str:
+        """Цвет заливки, который отделяется от фона слайда (по обоим стопам
+        градиента) минимум на min_ratio. Если исходный color уже виден —
+        возвращаем его; иначе берём ближайший видимый вариант (затемнённый/
+        осветлённый или, в крайнем случае, почти чёрный/белый)."""
+        stops = self._gradient_stops()
+        if C.worst_contrast_over_gradient(color, stops) >= min_ratio:
+            return C.to_hex(color, with_hash=False)
+        cands = [
+            color,
+            C.to_hex(C.darken(color, 0.4), with_hash=False),
+            C.to_hex(C.lighten(color, 0.4), with_hash=False),
+            "111111", "F0F0F0",
+        ]
+        return C.to_hex(
+            C.best_text_color_over_gradient(stops, candidates=cands),
+            with_hash=False,
+        )
+
+    def _chart_label_ink(self) -> str:
+        """Цвет подписей/осей графика — читаемый поверх фона слайда."""
+        return self._text_on_background()
+
     def _set_premium_background(self, slide) -> None:
         """«Премиум»-фон: диагональный градиент с тремя стопами.
 
@@ -1382,14 +1443,17 @@ class DigestBuilder:
         role='strong' — основной текст, предпочитаем palette.text_dark;
         role='muted'  — вторичный текст, предпочитаем palette.text_muted.
 
-        Если предпочтительный фирменный цвет проходит WCAG для своего
-        кегля — оставляем его (сохраняем фирменный тон). Иначе подтягиваем
-        тоном к читаемому, в крайнем случае — чистый чёрный/белый.
+        Если пользователь явно зафиксировал цвет текста — возвращаем его
+        как есть (даже при низком контрасте: «делаю как просил»). Иначе:
+        сохраняем фирменный тон, если он проходит WCAG; не проходит —
+        подтягиваем тоном, в крайнем случае чистый чёрный/белый.
         """
         prefer = self.palette.text_muted if role == "muted" else self.palette.text_dark
+        lock_roles = ("text", "text_muted") if role == "muted" else ("text",)
+        if self._locked(*lock_roles):
+            return C.to_hex(prefer, with_hash=False)
         min_ratio = C.min_ratio_for_font(size_pt, bold)
         if role == "muted":
-            # вторичному тексту позволяем чуть мягче, но не ниже 3:1
             min_ratio = max(C.AA_LARGE, min_ratio - 1.0)
         return C.to_hex(C.ensure_contrast(prefer, bg, min_ratio), with_hash=False)
 
@@ -1416,6 +1480,9 @@ class DigestBuilder:
         """
         stops = self._gradient_stops()
         prefer = self.palette.text_dark
+        # Пользователь явно задал цвет текста — рендерим как есть.
+        if self._locked("text"):
+            return C.to_hex(prefer, with_hash=False)
         if C.worst_contrast_over_gradient(prefer, stops) >= C.AA_NORMAL:
             return C.to_hex(prefer, with_hash=False)
         rgb = C.best_text_color_over_gradient(
@@ -1426,6 +1493,8 @@ class DigestBuilder:
         """Приглушённый текст поверх градиента (подзаголовки, мета)."""
         stops = self._gradient_stops()
         prefer = self.palette.text_muted
+        if self._locked("text", "text_muted"):
+            return C.to_hex(prefer, with_hash=False)
         if C.worst_contrast_over_gradient(prefer, stops) >= C.AA_LARGE:
             return C.to_hex(prefer, with_hash=False)
         rgb = C.best_text_color_over_gradient(

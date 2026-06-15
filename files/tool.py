@@ -35,6 +35,7 @@ from .prompts import (
     system_prompt,
 )
 from .schemas import ColorPalette, DigestSpec, DigestStyle
+from .style_resolver import merge_palette, parse_style_directives
 from .themes import detect_theme, get_theme_by_name, resolve_palette
 
 
@@ -254,58 +255,67 @@ class GenerateDigestTool(BaseTool):
             # Возвращаем читабельную ошибку агенту, чтобы он мог отреагировать
             return f"ОШИБКА: {type(e).__name__}: {e}"
 
-    @staticmethod
     def _apply_detected_palette(
-        spec: DigestSpec, style_prompt: str, force_theme: Optional[str] = None,
+        self, spec: DigestSpec, style_prompt: str, force_theme: Optional[str] = None,
     ) -> DigestSpec:
         """
-        Заменяет палитру в спеке на тему.
+        Резолвит палитру ПО ПРОМПТУ, послойно, с явным приоритетом:
 
-        Приоритет:
-        1. force_theme — явно указанная тема (по имени), в обход текста.
-        2. detect_theme(style_prompt) — автодетект по ключевым словам.
-
-        Применяется ЖЁСТКО: пересобираем DigestStyle. Ошибки логируются явно.
+        1. БАЗА — согласованная стартовая палитра:
+             force_theme (по имени) > keyword-пресет (detect_theme) > палитра LLM.
+        2. ЯВНЫЕ ДИРЕКТИВЫ из текста ("белый фон", "чёрный текст", "акцент
+           оранжевый", "текст #EAEAEA") — накладываются ПОВЕРХ базы по ролям.
+           Роли фона и текста разбираются ОТДЕЛЬНО (style_resolver), поэтому
+           "тёмный фон и тёмный текст" больше НЕ превращает текст в белый.
+        3. ЗАМКИ — заданные пользователем роли пишутся в style.locked_roles.
+           Билдер их не трогает авто-контрастом: рендерит ровно как просили,
+           даже если контраст низкий («делаю как сказал»).
         """
+        # 1. База
         preset = None
         if force_theme:
             preset = get_theme_by_name(force_theme)
-            if preset:
-                logger.info("Тема задана явно через force_theme='%s'", force_theme)
-            else:
-                logger.warning(
-                    "force_theme='%s' не найдена среди пресетов, пробую автодетект",
-                    force_theme,
-                )
-        if preset is None:
+            if preset is None:
+                logger.warning("force_theme='%s' не найдена среди пресетов", force_theme)
+        if preset is None and self.force_palette_from_style:
             preset = detect_theme(style_prompt)
 
-        if preset is None:
-            logger.info(
-                "Тема не определена (ни force_theme, ни ключевые слова) — "
-                "палитра от LLM сохранена. style_prompt был: %r",
-                style_prompt[:120],
-            )
-            return spec
+        if preset is not None:
+            base = dict(preset.palette)
+            base_name = preset.name
+        else:
+            base = spec.style.palette.model_dump()
+            base_name = "палитра LLM"
 
-        # Строим новую палитру из пресета
-        new_palette = ColorPalette(**dict(preset.palette))
+        # 2. Явные директивы из промпта (приоритет над базой) + замки
+        overrides, locked = parse_style_directives(style_prompt)
+        merged = merge_palette(base, overrides)
 
+        # 3. Пересобираем стиль с замками
         try:
-            new_style = DigestStyle(
-                palette=new_palette,
-                typography=spec.style.typography,
-            )
+            new_palette = ColorPalette(**merged)
+        except Exception:
+            logger.exception("Палитра из директив невалидна — оставляю базу")
+            new_palette = ColorPalette(**base)
+            locked = set()
+
+        new_style = DigestStyle(
+            palette=new_palette,
+            typography=spec.style.typography,
+            locked_roles=sorted(locked),
+        )
+        try:
             updated = spec.model_copy(update={"style": new_style})
         except Exception:
             logger.exception("model_copy не сработал, пересобираю spec целиком")
             data = spec.model_dump()
-            data["style"]["palette"] = dict(preset.palette)
+            data["style"] = new_style.model_dump()
             updated = DigestSpec.model_validate(data)
 
         logger.info(
-            "✔ Применена палитра-пресет '%s' (фон #%s)",
-            preset.name, preset.palette["gradient_start"],
+            "✔ Стиль: база=%s, директивы=%s, замки=%s, фон=#%s",
+            base_name, list(overrides.keys()) or "нет", sorted(locked) or "нет",
+            new_palette.gradient_start,
         )
         return updated
 
@@ -435,11 +445,10 @@ class GenerateDigestTool(BaseTool):
             spec = self._enforce_topic_count(spec, target_count)
 
         # 2.6. ПРИНУДИТЕЛЬНО применяем палитру по стилю из запроса.
-        # LLM плохо слушает указания про цвета («тёмное оформление») и копирует
-        # палитру из примера. Детектируем тему по ключевым словам (или берём
-        # force_theme) и подставляем готовую палитру — гарантированно.
-        if self.force_palette_from_style or force_theme:
-            spec = self._apply_detected_palette(spec, style_prompt, force_theme)
+        # Резолвим палитру по промпту ВСЕГДА: даже без пресета нужно применить
+        # явные цветовые директивы из текста ("чёрный текст" и т.п.) и проставить
+        # замки, чтобы билдер не перетирал заданные пользователем цвета.
+        spec = self._apply_detected_palette(spec, style_prompt, force_theme)
 
         # 3. Определяем путь вывода
         if output_path is None:
