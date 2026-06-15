@@ -29,7 +29,9 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
+from . import contrast as C
 from .icons import draw_icon, has_icon
+from .safe import with_fallback
 from .schemas import (
     AttentionSlide,
     ChartSlide,
@@ -75,10 +77,41 @@ class DigestBuilder:
     def __init__(self, spec: DigestSpec):
         self.spec = spec
         self.style = spec.style
-        self.palette = spec.style.palette
+        self.palette = self._heal_palette(spec.style.palette)
         self.prs = Presentation()
         self.prs.slide_width = SLIDE_WIDTH
         self.prs.slide_height = SLIDE_HEIGHT
+
+    # ----------------------------------------------------------------------- #
+    # Самолечение палитры: гарантируем читаемость основного/приглушённого
+    # текста на поверхностях карточек. Для согласованных пресетов — no-op;
+    # срабатывает только на «сломанной» кастомной палитре (например от LLM).
+    # ----------------------------------------------------------------------- #
+
+    def _heal_palette(self, pal):
+        surfaces = [pal.card_bg, pal.kpi_bg]
+        new_dark = self._heal_ink(pal.text_dark, surfaces, C.AA_NORMAL)
+        new_muted = self._heal_ink(pal.text_muted, surfaces, C.AA_LARGE)
+        try:
+            # Pydantic v2 — не мутируем исходную спеку, делаем копию
+            return pal.model_copy(update={"text_dark": new_dark,
+                                          "text_muted": new_muted})
+        except AttributeError:
+            # dataclass-mock из smoke_test — правим поля на месте
+            pal.text_dark = new_dark
+            pal.text_muted = new_muted
+            return pal
+
+    @staticmethod
+    def _heal_ink(color: str, surfaces: list[str], min_ratio: float) -> str:
+        """Если color читается на всех surfaces — оставляем; иначе берём
+        цвет с максимальным минимальным контрастом по поверхностям."""
+        worst = min(C.contrast_ratio(color, s) for s in surfaces)
+        if worst >= min_ratio:
+            return C.to_hex(color, with_hash=False)
+        rgb = C.best_text_color_over_gradient(
+            surfaces, candidates=[color, "0A0A0A", "FFFFFF"])
+        return C.to_hex(rgb, with_hash=False)
 
     def build(self, output_path: str | Path) -> Path:
         output_path = Path(output_path)
@@ -150,9 +183,18 @@ class DigestBuilder:
         return output_path
 
     def _new_slide(self):
-        """Создаёт пустой слайд с градиентным фоном."""
+        """Создаёт пустой слайд с градиентным фоном.
+
+        Сначала пробуем «премиум»-фон (диагональный 3-стоповый градиент);
+        при любой ошибке рендера откатываемся на простой 2-цветный — тот,
+        что работал раньше. Презентация не падает ни при каких условиях.
+        """
         slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
-        self._set_gradient_background(slide)
+        with_fallback(
+            lambda: self._set_premium_background(slide),
+            lambda: self._set_gradient_background(slide),
+            label="background",
+        )
         return slide
 
     # ----------------------------------------------------------------------- #
@@ -468,11 +510,13 @@ class DigestBuilder:
         tf.text = "new"
         p = tf.paragraphs[0]
         p.alignment = PP_ALIGN.CENTER
+        badge_ink = self._ink_on(self.palette.badge, prefer="FFFFFF",
+                                 size_pt=9, bold=True)
         for run in p.runs:
             run.font.name = self.style.typography.body_font
             run.font.size = Pt(9)
             run.font.bold = True
-            run.font.color.rgb = self._rgb("FFFFFF")
+            run.font.color.rgb = self._rgb(badge_ink)
 
     # ----------------------------------------------------------------------- #
     # АНАЛИТИЧЕСКИЕ СЛАЙДЫ
@@ -552,7 +596,9 @@ class DigestBuilder:
                 run.font.name = self.style.typography.heading_font
                 run.font.size = Pt(18)
                 run.font.bold = True
-                run.font.color.rgb = self._rgb(self.palette.kpi_bg)
+                run.font.color.rgb = self._rgb(self._ink_on(
+                    self.palette.accent, prefer=self.palette.kpi_bg,
+                    size_pt=18, bold=True))
 
             content_left = MARGIN_X + Inches(0.7)
             content_width = SLIDE_WIDTH - content_left - MARGIN_X
@@ -730,7 +776,8 @@ class DigestBuilder:
                 run.font.name = self.style.typography.body_font
                 run.font.size = Pt(11)
                 run.font.bold = True
-                run.font.color.rgb = self._rgb(self.palette.kpi_bg)
+                run.font.color.rgb = self._rgb(self._ink_on(
+                    color, prefer=self.palette.kpi_bg, size_pt=11, bold=True))
 
     def _render_closing(self, slide, s: ClosingSlide) -> None:
         """Финальный слайд: обобщающий текст + опциональные итоговые KPI."""
@@ -1002,6 +1049,13 @@ class DigestBuilder:
             card.line.color.rgb = self._rgb(border_color)
             card.line.width = Pt(1.0)
 
+        # Авто-контраст: у карточки со сплошной заливкой цвет текста
+        # вычисляется от её фактического фона (а не вслепую из палитры).
+        if card_bg:
+            value_color = self._ink(card_bg, role="strong",
+                                    size_pt=value_size, bold=True)
+            label_color = self._ink(card_bg, role="muted", size_pt=label_size)
+
         # Иконка в правом верхнем углу (если задан icon_hint)
         icon_hint = getattr(kpi, "icon_hint", None)
         if icon_hint and has_icon(icon_hint):
@@ -1062,6 +1116,10 @@ class DigestBuilder:
         inner_pad_x_emu = Inches(0.3)
 
         current_left = start_left
+        # Авто-контраст: цвет текста pill — от её заливки. Желаемый text_color
+        # сохраняется, если читается на bg_color, иначе берётся чёрный/белый.
+        pill_ink = self._ink_on(bg_color, prefer=text_color,
+                                size_pt=font_size, bold=False)
         for tag in tags:
             # Эвристика ширины pill. Кириллица шире латиницы, поэтому
             # коэффициент щедрый. Размер pt в EMU: 1pt ≈ 12700 EMU.
@@ -1093,7 +1151,7 @@ class DigestBuilder:
             for run in p.runs:
                 run.font.name = self.style.typography.body_font
                 run.font.size = Pt(font_size)
-                run.font.color.rgb = self._rgb(text_color)
+                run.font.color.rgb = self._rgb(pill_ink)
 
             current_left = current_left + pill_width + pill_gap
 
@@ -1156,6 +1214,44 @@ class DigestBuilder:
     # ----------------------------------------------------------------------- #
     # Градиентный фон (прямой XML)
     # ----------------------------------------------------------------------- #
+
+    def _set_premium_background(self, slide) -> None:
+        """«Премиум»-фон: диагональный градиент с тремя стопами.
+
+        Промежуточный стоп — смесь start/end, что даёт более глубокий,
+        «дорогой» переход, чем простые два цвета. Угол 45°. Если что-то
+        пойдёт не так — вызывающий код (_new_slide) откатится на
+        _set_gradient_background.
+        """
+        start_hex = self.palette.gradient_start.lstrip("#")
+        end_hex = self.palette.gradient_end.lstrip("#")
+
+        # Средний стоп — смесь крайних, чуть подсвеченная, для глубины
+        sr, sg, sb = C.parse_color(start_hex)
+        er, eg, eb = C.parse_color(end_hex)
+        mid = C.to_hex(((sr + er) // 2, (sg + eg) // 2, (sb + eb) // 2),
+                       with_hash=False)
+
+        gradient_xml = f"""
+        <p:bgPr xmlns:p="{NS_P}" xmlns:a="{NS_A}">
+            <a:gradFill flip="none" rotWithShape="1">
+                <a:gsLst>
+                    <a:gs pos="0"><a:srgbClr val="{start_hex}"/></a:gs>
+                    <a:gs pos="50000"><a:srgbClr val="{mid}"/></a:gs>
+                    <a:gs pos="100000"><a:srgbClr val="{end_hex}"/></a:gs>
+                </a:gsLst>
+                <a:lin ang="2700000" scaled="1"/>
+            </a:gradFill>
+        </p:bgPr>
+        """
+
+        bg = slide.background
+        bg_elem = bg._element
+        new_bg_pr = etree.fromstring(gradient_xml)
+        for tag in ("p:bgPr", "p:bgRef"):
+            for old in bg_elem.findall(qn(tag)):
+                bg_elem.remove(old)
+        bg_elem.append(new_bg_pr)
 
     def _set_gradient_background(self, slide) -> None:
         """
@@ -1272,32 +1368,66 @@ class DigestBuilder:
         r, g, b = (int(h[i:i+2], 16) / 255.0 for i in (0, 2, 4))
         return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
-    def _text_on_background(self) -> str:
-        """
-        Контрастный цвет текста для элементов поверх ГРАДИЕНТА фона.
+    # ----------------------------------------------------------------------- #
+    # Авто-контраст (WCAG). Единая точка выбора цвета текста под фон.
+    # ----------------------------------------------------------------------- #
 
-        На обложке и аналитических заголовках текст лежит прямо на
-        градиенте, а не на карточке. text_dark из палитры может с ним
-        сливаться (тёмный текст на тёмном фоне). Поэтому выбираем
-        белый/тёмный по яркости фона.
+    def _gradient_stops(self) -> list[str]:
+        return [self.palette.gradient_start, self.palette.gradient_end]
+
+    def _ink(self, bg: str, *, role: str = "strong",
+             size_pt: float = 14, bold: bool = False) -> str:
+        """Цвет текста, читаемого на СПЛОШНОМ фоне bg (hex).
+
+        role='strong' — основной текст, предпочитаем palette.text_dark;
+        role='muted'  — вторичный текст, предпочитаем palette.text_muted.
+
+        Если предпочтительный фирменный цвет проходит WCAG для своего
+        кегля — оставляем его (сохраняем фирменный тон). Иначе подтягиваем
+        тоном к читаемому, в крайнем случае — чистый чёрный/белый.
         """
-        # Средняя яркость градиента
-        lum = (self._luminance(self.palette.gradient_start) +
-               self._luminance(self.palette.gradient_end)) / 2
-        # Тёмный фон → светлый текст, и наоборот
-        if lum < 0.5:
-            # Если в палитре text_dark уже светлый — берём его (он «основной»),
-            # иначе белый
-            return self.palette.text_dark if self._luminance(self.palette.text_dark) > 0.6 else "FFFFFF"
-        else:
-            return self.palette.text_dark if self._luminance(self.palette.text_dark) < 0.5 else "1A1A1A"
+        prefer = self.palette.text_muted if role == "muted" else self.palette.text_dark
+        min_ratio = C.min_ratio_for_font(size_pt, bold)
+        if role == "muted":
+            # вторичному тексту позволяем чуть мягче, но не ниже 3:1
+            min_ratio = max(C.AA_LARGE, min_ratio - 1.0)
+        return C.to_hex(C.ensure_contrast(prefer, bg, min_ratio), with_hash=False)
+
+    def _ink_on(self, fill_bg: str, *, prefer: Optional[str] = None,
+                size_pt: float = 12, bold: bool = True) -> str:
+        """Цвет текста на ЦВЕТНОЙ заливке фигуры (бейдж, кружок, плашка).
+
+        prefer — желаемый «вывернутый» цвет (например palette.kpi_bg для
+        белого текста на акценте). Если он проходит контраст — берём его,
+        иначе — лучший чёрный/белый. Так на белом фоне чёрная фигура
+        получает белый текст, на жёлтом бейдже — чёрный, и т.д.
+        """
+        min_ratio = C.min_ratio_for_font(size_pt, bold)
+        if prefer is not None and C.contrast_ratio(prefer, fill_bg) >= min_ratio:
+            return C.to_hex(prefer, with_hash=False)
+        return C.to_hex(C.best_text_color(fill_bg), with_hash=False)
+
+    def _text_on_background(self) -> str:
+        """Основной текст поверх ГРАДИЕНТА фона.
+
+        Считаем по maximin сразу по обоим стопам: текст не должен
+        провалиться ни на светлом, ни на тёмном конце градиента.
+        Фирменный text_dark сохраняем, если он читается на всём градиенте.
+        """
+        stops = self._gradient_stops()
+        prefer = self.palette.text_dark
+        if C.worst_contrast_over_gradient(prefer, stops) >= C.AA_NORMAL:
+            return C.to_hex(prefer, with_hash=False)
+        rgb = C.best_text_color_over_gradient(
+            stops, candidates=[prefer, "FFFFFF", "0A0A0A"])
+        return C.to_hex(rgb, with_hash=False)
 
     def _muted_on_background(self) -> str:
-        """Контрастный приглушённый цвет для подзаголовков на градиенте."""
-        lum = (self._luminance(self.palette.gradient_start) +
-               self._luminance(self.palette.gradient_end)) / 2
-        if lum < 0.5:
-            # На тёмном — text_muted, если он достаточно светлый, иначе светло-серый
-            return self.palette.text_muted if self._luminance(self.palette.text_muted) > 0.45 else "C8CCD8"
-        else:
-            return self.palette.text_muted if self._luminance(self.palette.text_muted) < 0.6 else "6B7280"
+        """Приглушённый текст поверх градиента (подзаголовки, мета)."""
+        stops = self._gradient_stops()
+        prefer = self.palette.text_muted
+        if C.worst_contrast_over_gradient(prefer, stops) >= C.AA_LARGE:
+            return C.to_hex(prefer, with_hash=False)
+        rgb = C.best_text_color_over_gradient(
+            stops, candidates=[prefer, "C8CCD8", "5A6B7D", "FFFFFF", "1A1A1A"])
+        return C.to_hex(rgb, with_hash=False)
