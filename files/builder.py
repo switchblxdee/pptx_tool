@@ -80,6 +80,9 @@ class DigestBuilder:
         # Роли, заданные пользователем явно — их авто-контраст не трогает.
         self.locked = set(getattr(spec.style, "locked_roles", None) or [])
         self.palette = self._heal_palette(spec.style.palette)
+        # Брендовые фоновые картинки (например шаблон SberF1)
+        self.bg_cover = self._resolve_asset(getattr(spec.style, "background_cover", None))
+        self.bg_content = self._resolve_asset(getattr(spec.style, "background_content", None))
         self.prs = Presentation()
         self.prs.slide_width = SLIDE_WIDTH
         self.prs.slide_height = SLIDE_HEIGHT
@@ -87,6 +90,14 @@ class DigestBuilder:
     def _locked(self, *roles: str) -> bool:
         """True, если любая из ролей зафиксирована пользователем."""
         return any(r in self.locked for r in roles)
+
+    @staticmethod
+    def _resolve_asset(name: Optional[str]) -> Optional[str]:
+        """Путь к упакованному ассету (assets/<name>) или None."""
+        if not name:
+            return None
+        p = Path(__file__).resolve().parent / "assets" / name
+        return str(p) if p.exists() else None
 
     # ----------------------------------------------------------------------- #
     # Самолечение палитры: гарантируем читаемость основного/приглушённого
@@ -143,7 +154,7 @@ class DigestBuilder:
         page = 1
 
         # 1. Обложка
-        cover_slide = self._new_slide()
+        cover_slide = self._new_slide(cover=True)
         self._render_cover(cover_slide, self.spec.cover)
         self._render_meta_header(cover_slide)
 
@@ -192,20 +203,34 @@ class DigestBuilder:
         self.prs.save(output_path)
         return output_path
 
-    def _new_slide(self):
-        """Создаёт пустой слайд с градиентным фоном.
+    def _new_slide(self, cover: bool = False):
+        """Создаёт пустой слайд с фоном.
 
-        Сначала пробуем «премиум»-фон (диагональный 3-стоповый градиент);
-        при любой ошибке рендера откатываемся на простой 2-цветный — тот,
-        что работал раньше. Презентация не падает ни при каких условиях.
+        Если в стиле заданы брендовые фоновые картинки (например шаблон
+        SberF1) — кладём картинку full-bleed (cover-фон на обложку, content
+        на остальные). Иначе — градиент (премиум → простой fallback).
+        Презентация не падает ни при каких условиях.
         """
         slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
-        with_fallback(
-            lambda: self._set_premium_background(slide),
-            lambda: self._set_gradient_background(slide),
-            label="background",
-        )
+        bg_img = self.bg_cover if cover else self.bg_content
+        if bg_img:
+            with_fallback(
+                lambda: self._set_image_background(slide, bg_img),
+                lambda: self._set_gradient_background(slide),
+                label="bg_image",
+            )
+        else:
+            with_fallback(
+                lambda: self._set_premium_background(slide),
+                lambda: self._set_gradient_background(slide),
+                label="background",
+            )
         return slide
+
+    def _set_image_background(self, slide, image_path: str) -> None:
+        """Кладёт картинку как фон слайда (full-bleed). Картинка добавляется
+        первой, поэтому оказывается позади всего контента."""
+        slide.shapes.add_picture(image_path, 0, 0, SLIDE_WIDTH, SLIDE_HEIGHT)
 
     # ----------------------------------------------------------------------- #
     # COVER
@@ -1572,7 +1597,16 @@ class DigestBuilder:
         min_ratio = C.min_ratio_for_font(size_pt, bold)
         if role == "muted":
             min_ratio = max(C.AA_LARGE, min_ratio - 1.0)
-        return C.to_hex(C.ensure_contrast(prefer, bg, min_ratio), with_hash=False)
+        # Фирменный цвет проходит по контрасту — оставляем его.
+        if C.contrast_ratio(prefer, bg) >= min_ratio:
+            return C.to_hex(prefer, with_hash=False)
+        # Не проходит — ЧЁТКИЙ чёрный/белый (без мутных полутонов).
+        base = C.best_text_color(bg)
+        if role == "muted":
+            soft = C._mix(base, C.parse_color(bg), 0.28)
+            if C.contrast_ratio(soft, bg) >= C.AA_LARGE:
+                return C.to_hex(soft, with_hash=False)
+        return C.to_hex(base, with_hash=False)
 
     def _ink_on(self, fill_bg: str, *, prefer: Optional[str] = None,
                 size_pt: float = 12, bold: bool = True) -> str:

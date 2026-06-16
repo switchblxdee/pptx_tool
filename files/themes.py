@@ -28,10 +28,18 @@ from typing import Dict, List, Optional
 
 @dataclass
 class ThemePreset:
-    """Готовая палитра (8 цветов) + ключевые слова для детекции."""
+    """Готовая палитра (8 цветов) + ключевые слова для детекции.
+
+    Опционально несёт брендовую типографику и фоновые картинки-ассеты
+    (например для фирменного шаблона SberF1).
+    """
     name: str
     keywords: List[str]
     palette: Dict[str, str]
+    heading_font: Optional[str] = None
+    body_font: Optional[str] = None
+    bg_cover: Optional[str] = None
+    bg_content: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -261,7 +269,28 @@ THEME_PRESETS: List[ThemePreset] = [
         },
     ),
 
-    # ---- ДЕФОЛТ (бирюзово-персиковый, референс «Голос IT») ----
+    # ---- ФИРМЕННЫЙ ШАБЛОН SberF1 ----
+    ThemePreset(
+        name="sberf1",
+        keywords=["sberf1", "sber f1", "сберф1", "сбер f1", "фирменн",
+                  "брендов", "бренд-стиль", "шаблон sber", "шаблон сбер",
+                  "корпоративный шаблон", "f1", "ф1", "блок технологии",
+                  "командасбера", "команда сбера"],
+        palette={
+            # фон контентных слайдов — светлый брендовый меш (картинка),
+            # поэтому стопы держим светлыми: текст на фоне выходит тёмным
+            "gradient_start": "FAFAF7", "gradient_end": "FFFFFF",
+            "card_bg": "FFFFFF", "kpi_bg": "111827",   # тёмные KPI как в шаблоне
+            "text_dark": "111827", "text_muted": "64748B",
+            "accent": "0669E0", "badge": "933EFF",     # брендовые синий/фиолет
+        },
+        heading_font="SB Sans Display",
+        body_font="SB Sans Display",
+        bg_cover="bg_cover.png",
+        bg_content="bg_content.png",
+    ),
+
+
     ThemePreset(
         name="default_teal_peach",
         keywords=["персик", "peach", "пастель", "голос it", "референс",
