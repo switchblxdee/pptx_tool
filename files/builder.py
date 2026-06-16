@@ -1426,83 +1426,37 @@ class DigestBuilder:
         """Цвет подписей/осей графика — читаемый поверх фона слайда."""
         return self._text_on_background()
 
+    def _apply_background_gradient(self, slide, angle_deg: float) -> None:
+        """Кладёт градиент на фон слайда ЧЕРЕЗ штатный API python-pptx.
+
+        Важно: раньше мы дописывали <p:bgPr> сырым XML прямо в <p:cSld>,
+        из-за чего получалась невалидная структура — PowerPoint её
+        игнорировал и оставлял фон белым (хотя LibreOffice рисовал). API
+        создаёт <p:bg><p:bgPr><a:gradFill> в правильном месте, и фон
+        корректно рендерится во всех редакторах.
+        """
+        start = self.palette.gradient_start.lstrip("#")
+        end = self.palette.gradient_end.lstrip("#")
+
+        fill = slide.background.fill
+        fill.gradient()
+        stops = fill.gradient_stops
+        stops[0].position = 0.0
+        stops[0].color.rgb = self._rgb(start)
+        stops[1].position = 1.0
+        stops[1].color.rgb = self._rgb(end)
+        try:
+            fill.gradient_angle = angle_deg
+        except Exception:
+            pass
+
     def _set_premium_background(self, slide) -> None:
-        """«Премиум»-фон: диагональный градиент с тремя стопами.
-
-        Промежуточный стоп — смесь start/end, что даёт более глубокий,
-        «дорогой» переход, чем простые два цвета. Угол 45°. Если что-то
-        пойдёт не так — вызывающий код (_new_slide) откатится на
-        _set_gradient_background.
-        """
-        start_hex = self.palette.gradient_start.lstrip("#")
-        end_hex = self.palette.gradient_end.lstrip("#")
-
-        # Средний стоп — смесь крайних, чуть подсвеченная, для глубины
-        sr, sg, sb = C.parse_color(start_hex)
-        er, eg, eb = C.parse_color(end_hex)
-        mid = C.to_hex(((sr + er) // 2, (sg + eg) // 2, (sb + eb) // 2),
-                       with_hash=False)
-
-        gradient_xml = f"""
-        <p:bgPr xmlns:p="{NS_P}" xmlns:a="{NS_A}">
-            <a:gradFill flip="none" rotWithShape="1">
-                <a:gsLst>
-                    <a:gs pos="0"><a:srgbClr val="{start_hex}"/></a:gs>
-                    <a:gs pos="50000"><a:srgbClr val="{mid}"/></a:gs>
-                    <a:gs pos="100000"><a:srgbClr val="{end_hex}"/></a:gs>
-                </a:gsLst>
-                <a:lin ang="2700000" scaled="1"/>
-            </a:gradFill>
-        </p:bgPr>
-        """
-
-        bg = slide.background
-        bg_elem = bg._element
-        new_bg_pr = etree.fromstring(gradient_xml)
-        for tag in ("p:bgPr", "p:bgRef"):
-            for old in bg_elem.findall(qn(tag)):
-                bg_elem.remove(old)
-        bg_elem.append(new_bg_pr)
+        """«Премиум»-фон: диагональный градиент (угол 45°)."""
+        self._apply_background_gradient(slide, 45.0)
 
     def _set_gradient_background(self, slide) -> None:
-        """
-        Устанавливает горизонтальный градиент на фон слайда.
-
-        python-pptx не имеет API для градиента фона, поэтому патчим XML
-        напрямую. Это стабильно работает и в PowerPoint, и в LibreOffice.
-        """
-        start_hex = self.palette.gradient_start.lstrip("#")
-        end_hex = self.palette.gradient_end.lstrip("#")
-
-        # Берём bg-элемент слайда и заменяем fill
-        bg = slide.background
-        # Создаём <p:bgPr> с градиентной заливкой
-        gradient_xml = f"""
-        <p:bgPr xmlns:p="{NS_P}" xmlns:a="{NS_A}">
-            <a:gradFill flip="none" rotWithShape="1">
-                <a:gsLst>
-                    <a:gs pos="0">
-                        <a:srgbClr val="{start_hex}"/>
-                    </a:gs>
-                    <a:gs pos="100000">
-                        <a:srgbClr val="{end_hex}"/>
-                    </a:gs>
-                </a:gsLst>
-                <a:lin ang="0" scaled="1"/>
-            </a:gradFill>
-        </p:bgPr>
-        """
-
-        # Заменяем существующий bg-element
-        bg_elem = bg._element  # CT_Background
-        new_bg_pr = etree.fromstring(gradient_xml)
-
-        # Удаляем старый bgPr/bgRef если есть
-        for tag in ("p:bgPr", "p:bgRef"):
-            for old in bg_elem.findall(qn(tag)):
-                bg_elem.remove(old)
-
-        bg_elem.append(new_bg_pr)
+        """Простой горизонтальный градиент фона (надёжный fallback)."""
+        self._apply_background_gradient(slide, 0.0)
 
     # ----------------------------------------------------------------------- #
     # Утилиты текста и стиля
