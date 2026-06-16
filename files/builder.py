@@ -398,7 +398,7 @@ class DigestBuilder:
                 left=left + inner_pad_x, top=row_top,
                 width=col_num_width, height=Inches(0.4),
                 font=self.style.typography.body_font,
-                size=14, bold=True, color=self.palette.text_dark,
+                size=14, bold=True, on=self.palette.card_bg, role="strong",
                 anchor=MSO_ANCHOR.TOP,
             )
 
@@ -424,7 +424,7 @@ class DigestBuilder:
                 left=content_left, top=row_top,
                 width=content_width, height=Inches(0.4),
                 font=self.style.typography.heading_font,
-                size=15, bold=True, color=self.palette.text_dark,
+                size=15, bold=True, on=self.palette.card_bg, role="strong",
             )
 
             # Цитата под заголовком (курсив) — начинается с того же left,
@@ -435,7 +435,7 @@ class DigestBuilder:
                     left=col_content_left, top=row_top + Inches(0.4),
                     width=col_content_width, height=Inches(0.6),
                     font=self.style.typography.body_font,
-                    size=11, italic=True, color=self.palette.text_muted,
+                    size=11, italic=True, on=self.palette.card_bg, role="muted",
                     line_spacing=1.2,
                 )
 
@@ -445,7 +445,7 @@ class DigestBuilder:
                 left=col_period_left, top=row_top + Inches(0.05),
                 width=col_period_width, height=Inches(0.4),
                 font=self.style.typography.body_font,
-                size=12, color=self.palette.text_dark,
+                size=12, on=self.palette.card_bg, role="strong",
                 align=PP_ALIGN.RIGHT,
             )
 
@@ -455,7 +455,7 @@ class DigestBuilder:
                 left=col_mentions_left, top=row_top,
                 width=col_mentions_width, height=Inches(0.4),
                 font=self.style.typography.heading_font,
-                size=20, bold=True, color=self.palette.text_dark,
+                size=20, bold=True, on=self.palette.card_bg, role="strong",
                 align=PP_ALIGN.RIGHT,
             )
             self._add_text(
@@ -463,7 +463,7 @@ class DigestBuilder:
                 left=col_mentions_left, top=row_top + Inches(0.4),
                 width=col_mentions_width, height=Inches(0.3),
                 font=self.style.typography.body_font,
-                size=10, color=self.palette.text_muted,
+                size=10, on=self.palette.card_bg, role="muted",
                 align=PP_ALIGN.RIGHT,
             )
 
@@ -574,7 +574,7 @@ class DigestBuilder:
                 left=MARGIN_X + Inches(0.35), top=top + Inches(0.1),
                 width=SLIDE_WIDTH - MARGIN_X * 2 - Inches(0.7), height=Inches(0.7),
                 font=self.style.typography.body_font,
-                size=14, color=self.palette.text_dark,
+                size=14, on=self.palette.card_bg, role="strong",
                 anchor=MSO_ANCHOR.MIDDLE,
             )
             top = top + Inches(1.2)
@@ -619,7 +619,7 @@ class DigestBuilder:
                 left=content_left, top=row_top,
                 width=content_width, height=Inches(0.45),
                 font=self.style.typography.heading_font,
-                size=18, bold=True, color=self.palette.text_dark,
+                size=18, bold=True, color=self._text_on_background(),
             )
             # Detail
             if point.detail:
@@ -628,7 +628,7 @@ class DigestBuilder:
                     left=content_left, top=row_top + Inches(0.45),
                     width=content_width, height=Inches(0.5),
                     font=self.style.typography.body_font,
-                    size=13, color=self.palette.text_muted,
+                    size=13, color=self._muted_on_background(),
                 )
 
     def _render_patterns(self, slide, s: PatternsSlide) -> None:
@@ -642,7 +642,7 @@ class DigestBuilder:
                 left=MARGIN_X, top=top,
                 width=SLIDE_WIDTH - MARGIN_X * 2, height=Inches(0.6),
                 font=self.style.typography.body_font,
-                size=14, color=self.palette.text_muted,
+                size=14, color=self._muted_on_background(),
             )
             top = top + Inches(0.75)
 
@@ -672,7 +672,7 @@ class DigestBuilder:
                 left=inner_x, top=card_top + Inches(0.15),
                 width=title_width, height=Inches(0.4),
                 font=self.style.typography.heading_font,
-                size=16, bold=True, color=self.palette.text_dark,
+                size=16, bold=True, on=self.palette.card_bg, role="strong",
             )
             # Описание
             self._add_text(
@@ -680,7 +680,7 @@ class DigestBuilder:
                 left=inner_x, top=card_top + Inches(0.55),
                 width=title_width, height=card_height - Inches(0.6),
                 font=self.style.typography.body_font,
-                size=12, color=self.palette.text_muted,
+                size=12, on=self.palette.card_bg, role="muted",
             )
 
             # Бейдж «затронуто N тем» справа
@@ -691,7 +691,7 @@ class DigestBuilder:
                     left=badge_left, top=card_top + Inches(0.15),
                     width=Inches(1.4), height=Inches(0.5),
                     font=self.style.typography.heading_font,
-                    size=28, bold=True, color=self.palette.accent,
+                    size=28, bold=True, color=self._accent_ink(self.palette.card_bg),
                     align=PP_ALIGN.RIGHT,
                 )
                 self._add_text(
@@ -699,7 +699,7 @@ class DigestBuilder:
                     left=badge_left, top=card_top + Inches(0.65),
                     width=Inches(1.4), height=Inches(0.3),
                     font=self.style.typography.body_font,
-                    size=10, color=self.palette.text_muted,
+                    size=10, on=self.palette.card_bg, role="muted",
                     align=PP_ALIGN.RIGHT,
                 )
 
@@ -754,7 +754,7 @@ class DigestBuilder:
                 left=inner_x, top=card_top + Inches(0.15),
                 width=content_width, height=Inches(0.4),
                 font=self.style.typography.heading_font,
-                size=15, bold=True, color=self.palette.text_dark,
+                size=15, bold=True, on=self.palette.kpi_bg, role="strong",
             )
             # Обоснование
             self._add_text(
@@ -762,7 +762,7 @@ class DigestBuilder:
                 left=inner_x, top=card_top + Inches(0.55),
                 width=content_width, height=card_height - Inches(0.6),
                 font=self.style.typography.body_font,
-                size=12, color=self.palette.text_muted,
+                size=12, on=self.palette.kpi_bg, role="muted",
             )
 
             # Бейдж severity справа
@@ -809,7 +809,7 @@ class DigestBuilder:
             left=MARGIN_X + Inches(0.5), top=Inches(2.0),
             width=SLIDE_WIDTH - MARGIN_X * 2 - Inches(1.0), height=Inches(1.8),
             font=self.style.typography.body_font,
-            size=16, color=self.palette.text_dark,
+            size=16, on=self.palette.card_bg, role="strong",
             anchor=MSO_ANCHOR.MIDDLE,
             line_spacing=1.3,
         )
@@ -839,16 +839,20 @@ class DigestBuilder:
         "pie": XL_CHART_TYPE.PIE,
     }
 
-    def _render_chart(self, slide, s: ChartSlide) -> None:
-        """
-        Рендерит слайд с НАТИВНЫМ PowerPoint-графиком.
+    # Рисовать столбчатые графики фигурами (прямоугольниками), а не нативным
+    # чарт-объектом. Фигуры рендерятся одинаково везде (PowerPoint/LibreOffice/
+    # Google Slides), поэтому «столбцы не появились» становится невозможным.
+    DRAW_CHARTS_AS_SHAPES = True
 
-        График — это редактируемый объект pptx (не картинка), цвета берутся
-        из палитры дайджеста. matplotlib не используется.
+    def _render_chart(self, slide, s: ChartSlide) -> None:
+        """Слайд с графиком.
+
+        Для column/bar по умолчанию рисуем гистограмму ФИГУРАМИ (надёжно во
+        всех редакторах). Для pie/line — нативный pptx-чарт. Нативный путь
+        остаётся fallback'ом, если отрисовка фигурами вдруг упадёт.
         """
         self._render_slide_title(slide, s.title)
 
-        # Подзаголовок
         chart_top = Inches(1.7)
         if s.subtitle:
             self._add_text(
@@ -856,32 +860,26 @@ class DigestBuilder:
                 left=MARGIN_X, top=Inches(1.55),
                 width=SLIDE_WIDTH - MARGIN_X * 2, height=Inches(0.5),
                 font=self.style.typography.body_font,
-                size=14, color=self.palette.text_muted,
+                size=14, color=self._muted_on_background(),
             )
             chart_top = Inches(2.15)
 
-        # Готовим данные
-        chart_data = CategoryChartData()
-        chart_data.categories = s.categories
-        chart_data.add_series(s.value_label, s.values)
-
-        # Зона графика. Если есть insight — оставляем место снизу.
         chart_height = Inches(3.9) if s.insight else Inches(4.5)
         chart_width = SLIDE_WIDTH - MARGIN_X * 2
 
-        xl_type = self._CHART_TYPE_MAP.get(s.chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+        if self.DRAW_CHARTS_AS_SHAPES and s.chart_type in ("column", "bar"):
+            with_fallback(
+                lambda: self._render_bar_chart_shapes(
+                    slide, s, MARGIN_X, chart_top, chart_width, chart_height),
+                lambda: self._render_native_chart(
+                    slide, s, chart_top, chart_height, chart_width),
+                label="bar_chart_shapes",
+            )
+        else:
+            self._render_native_chart(slide, s, chart_top, chart_height, chart_width)
 
-        graphic_frame = slide.shapes.add_chart(
-            xl_type, MARGIN_X, chart_top, chart_width, chart_height, chart_data,
-        )
-        chart = graphic_frame.chart
-
-        self._style_chart(chart, s)
-
-        # Аналитический вывод под графиком
         if s.insight:
             insight_top = chart_top + chart_height + Inches(0.1)
-            # Плашка с выводом
             card = slide.shapes.add_shape(
                 MSO_SHAPE.ROUNDED_RECTANGLE,
                 MARGIN_X, insight_top,
@@ -891,15 +889,167 @@ class DigestBuilder:
             self._fill_solid(card, self.palette.card_bg)
             card.line.fill.background()
             self._apply_subtle_shadow(card)
-
             self._add_text(
                 slide, s.insight,
                 left=MARGIN_X + Inches(0.35), top=insight_top + Inches(0.05),
                 width=SLIDE_WIDTH - MARGIN_X * 2 - Inches(0.7), height=Inches(0.6),
                 font=self.style.typography.body_font,
-                size=13, color=self.palette.text_dark,
+                size=13, color=self._ink(self.palette.card_bg, role="strong", size_pt=13),
                 anchor=MSO_ANCHOR.MIDDLE,
             )
+
+    @staticmethod
+    def _nice_ceil(v: float) -> float:
+        """Округляет максимум вверх до «красивого» числа для оси."""
+        import math
+        if v <= 0:
+            return 1.0
+        mag = 10 ** math.floor(math.log10(v))
+        for m in (1, 2, 2.5, 5, 10):
+            if v <= m * mag:
+                return m * mag
+        return 10 * mag
+
+    def _render_bar_chart_shapes(
+        self, slide, s: ChartSlide, left, top, width, height,
+    ) -> None:
+        """Гистограмма, нарисованная прямоугольниками (column или bar).
+
+        Полностью независима от чарт-движка редактора: оси — линии-коннекторы,
+        столбцы — autoshapes, подписи — текстбоксы. Цвет столбцов контрастен
+        фону (никогда не «исчезает»), у каждого столбца есть контур.
+        """
+        horizontal = (s.chart_type == "bar")
+        values = list(s.values)
+        cats = list(s.categories)
+        n = len(values)
+        if n == 0:
+            return
+
+        vmax = max(values + [0])
+        nice_max = self._nice_ceil(vmax)
+
+        ink = self._text_on_background()
+        grid = self._muted_on_background()
+        bar_fill = (self.palette.accent if self._locked("accent")
+                    else self._contrasting_fill(self.palette.accent, 3.0))
+        bar_outline = self._contrasting_fill(bar_fill, 1.6)
+
+        L, T, W, H = int(left), int(top), int(width), int(height)
+        y_gutter = int(Inches(0.55))   # под подписи оси значений / категорий (для bar)
+        x_gutter = int(Inches(0.45))   # под подписи категорий / значений
+
+        if not horizontal:
+            # --- ВЕРТИКАЛЬНЫЕ СТОЛБЦЫ (column) ---
+            plot_left = L + y_gutter
+            plot_top = T
+            plot_w = W - y_gutter
+            plot_h = H - x_gutter
+            baseline = plot_top + plot_h
+
+            self._chart_axis_line(slide, plot_left, baseline, plot_left + plot_w, baseline, ink)
+            self._chart_axis_line(slide, plot_left, plot_top, plot_left, baseline, ink)
+
+            ticks = 5
+            for t in range(ticks + 1):
+                gy = baseline - int(plot_h * t / ticks)
+                if t > 0:
+                    self._chart_axis_line(slide, plot_left, gy, plot_left + plot_w, gy,
+                                          grid, width_pt=0.5)
+                self._add_text(
+                    slide, self._fmt_num(nice_max * t / ticks),
+                    left=Emu(L), top=Emu(gy - int(Inches(0.12))),
+                    width=Emu(y_gutter - int(Inches(0.08))), height=Inches(0.24),
+                    font=self.style.typography.body_font, size=9, color=ink,
+                    align=PP_ALIGN.RIGHT, anchor=MSO_ANCHOR.MIDDLE,
+                )
+
+            slot = plot_w / n
+            bar_w = int(slot * 0.6)
+            for i, v in enumerate(values):
+                bx = int(plot_left + slot * i + (slot - bar_w) / 2)
+                bh = int(plot_h * (v / nice_max)) if nice_max else 0
+                by = baseline - bh
+                if bh > 0:
+                    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(bx), Emu(by),
+                                                 Emu(bar_w), Emu(bh))
+                    self._fill_solid(bar, bar_fill)
+                    bar.line.color.rgb = self._rgb(bar_outline)
+                    bar.line.width = Pt(1.0)
+                # значение над столбцом
+                self._add_text(
+                    slide, self._fmt_num(v),
+                    left=Emu(int(plot_left + slot * i)), top=Emu(by - int(Inches(0.28))),
+                    width=Emu(int(slot)), height=Inches(0.26),
+                    font=self.style.typography.heading_font, size=12, bold=True,
+                    color=ink, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
+                )
+                # подпись категории
+                self._add_text(
+                    slide, cats[i] if i < len(cats) else "",
+                    left=Emu(int(plot_left + slot * i)), top=Emu(baseline + int(Inches(0.06))),
+                    width=Emu(int(slot)), height=Inches(0.35),
+                    font=self.style.typography.body_font, size=10, color=ink,
+                    align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.TOP,
+                )
+        else:
+            # --- ГОРИЗОНТАЛЬНЫЕ ПОЛОСЫ (bar) ---
+            cat_gutter = int(Inches(1.9))  # слева под названия категорий
+            plot_left = L + cat_gutter
+            plot_top = T
+            plot_w = W - cat_gutter
+            plot_h = H
+
+            self._chart_axis_line(slide, plot_left, plot_top, plot_left, plot_top + plot_h, ink)
+
+            slot = plot_h / n
+            bar_h = int(slot * 0.55)
+            for i, v in enumerate(values):
+                by = int(plot_top + slot * i + (slot - bar_h) / 2)
+                bl = int(plot_w * (v / nice_max)) if nice_max else 0
+                if bl > 0:
+                    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(plot_left), Emu(by),
+                                                 Emu(bl), Emu(bar_h))
+                    self._fill_solid(bar, bar_fill)
+                    bar.line.color.rgb = self._rgb(bar_outline)
+                    bar.line.width = Pt(1.0)
+                # категория слева
+                self._add_text(
+                    slide, cats[i] if i < len(cats) else "",
+                    left=Emu(L), top=Emu(by - int(Inches(0.02))),
+                    width=Emu(cat_gutter - int(Inches(0.1))), height=Emu(bar_h + int(Inches(0.04))),
+                    font=self.style.typography.body_font, size=10, color=ink,
+                    align=PP_ALIGN.RIGHT, anchor=MSO_ANCHOR.MIDDLE,
+                )
+                # значение в конце полосы
+                self._add_text(
+                    slide, self._fmt_num(v),
+                    left=Emu(int(plot_left + bl + int(Inches(0.05)))), top=Emu(by),
+                    width=Inches(0.9), height=Emu(bar_h),
+                    font=self.style.typography.heading_font, size=12, bold=True,
+                    color=ink, align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.MIDDLE,
+                )
+
+    def _chart_axis_line(self, slide, x1, y1, x2, y2, color, width_pt: float = 1.0) -> None:
+        conn = slide.shapes.add_connector(1, Emu(int(x1)), Emu(int(y1)),
+                                          Emu(int(x2)), Emu(int(y2)))
+        conn.line.color.rgb = self._rgb(color)
+        conn.line.width = Pt(width_pt)
+
+    @staticmethod
+    def _fmt_num(v: float) -> str:
+        return str(int(v)) if float(v).is_integer() else f"{v:.1f}"
+
+    def _render_native_chart(self, slide, s: ChartSlide, chart_top, chart_height, chart_width) -> None:
+        """Нативный pptx-чарт (pie/line, и fallback для column/bar)."""
+        chart_data = CategoryChartData()
+        chart_data.categories = s.categories
+        chart_data.add_series(s.value_label, s.values)
+        xl_type = self._CHART_TYPE_MAP.get(s.chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+        graphic_frame = slide.shapes.add_chart(
+            xl_type, MARGIN_X, chart_top, chart_width, chart_height, chart_data,
+        )
+        self._style_chart(graphic_frame.chart, s)
 
     def _style_chart(self, chart, s: ChartSlide) -> None:
         """Применяет палитру дайджеста и базовое оформление к графику."""
@@ -1361,17 +1511,30 @@ class DigestBuilder:
     def _add_text(
         self, slide, text: str,
         left, top, width, height,
-        font: str, size: int, color: str,
+        font: str, size: int, color: str = None,
         bold: bool = False, italic: bool = False,
         align=PP_ALIGN.LEFT,
         anchor=MSO_ANCHOR.TOP,
         line_spacing: float | None = None,
+        on: str | None = None,
+        role: str = "strong",
     ) -> None:
         """Единая точка создания текстового бокса.
 
+        on   — hex заливки, НА КОТОРОЙ лежит текст. Если задан, цвет текста
+               вычисляется от этого фона (тёмный объект → светлый текст,
+               светлый объект → тёмный), с учётом «замков» пользователя.
+               Это и есть пообъектный контраст.
+        role — 'strong' (основной) или 'muted' (вторичный) — влияет на выбор
+               предпочтительного цвета и порог контраста.
+        color — явный цвет (для текста на градиенте, где фон не сплошной).
+                Используется, только если on не задан.
         line_spacing — множитель межстрочного интервала (1.0 = одинарный).
-        Для многострочных текстов 1.15-1.3 заметно улучшает читаемость.
         """
+        if on is not None:
+            color = self._ink(on, role=role, size_pt=size, bold=bold)
+        elif color is None:
+            color = self._text_on_background()
         box = slide.shapes.add_textbox(left, top, width, height)
         tf = box.text_frame
         tf.word_wrap = True
@@ -1470,6 +1633,11 @@ class DigestBuilder:
         if prefer is not None and C.contrast_ratio(prefer, fill_bg) >= min_ratio:
             return C.to_hex(prefer, with_hash=False)
         return C.to_hex(C.best_text_color(fill_bg), with_hash=False)
+
+    def _accent_ink(self, bg: str) -> str:
+        """Акцентный цвет текста (число), но гарантированно видимый на bg."""
+        return C.to_hex(C.ensure_contrast(self.palette.accent, bg, C.AA_LARGE),
+                        with_hash=False)
 
     def _text_on_background(self) -> str:
         """Основной текст поверх ГРАДИЕНТА фона.
