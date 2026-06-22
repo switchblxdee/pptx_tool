@@ -1,104 +1,103 @@
 """
-brand_icons.py — векторные иконки из фирменного шаблона SberF1.
+brand_icons.py — иконки из фирменного шаблона SberF1.
 
-Иконки в шаблоне нарисованы кастомной геометрией (freeform-пути),
-сгруппированы по одной на значок. Мы извлекли часть из них в
-assets/icons_sberf1.json и умеем вставлять любую на слайд: задаём позицию,
-размер и цвет (иконки перекрашиваются под палитру/контраст).
+Иконки в шаблоне нарисованы векторной геометрией (custGeom). Мы извлекли
+полезный набор и сохранили как прозрачные PNG в двух вариантах — тёмном и
+светлом — чтобы они читались и на светлых подложках, и на тёмных карточках.
 
-Формат assets/icons_sberf1.json:
-    {
-      "icons": { "i73": {"xml": "<p:grpSp ...>", "aspect": 1.0}, ... },
-      "hints": { "warning": "i73", "clock": "i66", ... }
-    }
+Почему PNG, а не вектор: цель — надёжная отрисовка в Р7-Офис (OnlyOffice),
+PowerPoint и LibreOffice одинаково. Картинки (`add_picture`) — самый
+универсально поддерживаемый элемент и не зависят от движка автофигур.
 
-Полный набор (540 иконок) можно достать скриптом extract_icons.py — он
-рендерит пронумерованный «контактный лист», по которому выбираешь нужные id.
+Публичный API (совместим с вызовами builder.py):
+    has_brand_icon(hint)  -> bool
+    draw_brand_icon(slide, hint, left, top, size, color) -> bool
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 
-from lxml import etree
+_ICON_DIR = Path(__file__).resolve().parent / "assets" / "icons"
 
-_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-_P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+# Смысловой хинт -> базовое имя извлечённой иконки.
+# Покрывает и авто-хинты билдера (signal/team/tools/...), и прямые имена.
+_ALIASES = {
+    # авто-хинты из _AUTO_ICON
+    "signal": "chart", "warning": "warning", "bell": "new", "growth": "growth",
+    "team": "users", "tools": "integration", "clock": "calendar", "bug": "error",
+    "search": "info", "money": "data", "email": "document", "security": "security",
+    # прямые / синонимы
+    "document": "document", "doc": "document", "report": "document",
+    "tag": "tag", "label": "tag", "category": "tag",
+    "rocket": "rocket", "launch": "rocket", "speed": "rocket",
+    "chart": "chart", "pie": "chart", "share": "chart", "distribution": "chart",
+    "integration": "integration", "network": "integration", "node": "integration",
+    "data": "data", "calc": "data", "metrics": "data",
+    "users": "users", "people": "users", "audience": "users", "user": "users",
+    "calendar": "calendar", "schedule": "calendar", "period": "calendar",
+    "time": "calendar", "date": "calendar",
+    "check": "check", "done": "check", "ok": "check", "success": "check",
+    "wifi": "wifi", "signal_wave": "wifi", "connect": "wifi",
+    "error": "error", "x": "error", "fail": "error", "close": "error",
+    "new": "new", "add": "new", "plus": "new",
+    "info": "info", "information": "info",
+    "alert": "warning", "attention": "warning", "risk": "warning",
+    "list": "list", "topics": "list", "menu": "list", "items": "list",
+    "up": "growth", "trend": "growth", "increase": "growth",
+}
 
 
-def _q(tag: str) -> str:
-    pfx, name = tag.split(":")
-    return f"{{{_A if pfx == 'a' else _P}}}{name}"
+def _base(hint: Optional[str]) -> Optional[str]:
+    if not hint:
+        return None
+    return _ALIASES.get(hint.lower().strip())
 
 
-_LIB = None
-
-
-def _load() -> dict:
-    global _LIB
-    if _LIB is None:
-        p = Path(__file__).resolve().parent / "assets" / "icons_sberf1.json"
-        try:
-            _LIB = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            _LIB = {"icons": {}, "hints": {}}
-    return _LIB
+def _exists(base: str) -> bool:
+    return (_ICON_DIR / f"icon_{base}_dark.png").exists()
 
 
 def has_brand_icon(hint: Optional[str]) -> bool:
-    if not hint:
-        return False
-    return hint.lower().strip() in _load().get("hints", {})
+    b = _base(hint)
+    return bool(b) and _exists(b)
 
 
 def available_brand_hints() -> list[str]:
-    return sorted(_load().get("hints", {}).keys())
+    return sorted(h for h in _ALIASES if _exists(_ALIASES[h]))
 
 
-def _recolor(group, hex_color: str) -> None:
-    """Перекрашивает все заливки (и контуры) иконки в один цвет."""
-    hexc = hex_color.lstrip("#").upper()
-    for sf in group.iter(_q("a:solidFill")):
-        for ch in list(sf):
-            sf.remove(ch)
-        etree.SubElement(sf, _q("a:srgbClr")).set("val", hexc)
-
-
-def stamp_icon(slide, icon_id: str, left, top, size, hex_color: str) -> bool:
-    """Вставляет иконку по её id (например 'i73') на слайд.
-
-    left/top/size — в EMU. Иконка масштабируется в квадрат size×size
-    (с учётом исходной пропорции) и перекрашивается в hex_color.
-    """
-    item = _load().get("icons", {}).get(icon_id)
-    if not item:
+def _is_light(color: Optional[str]) -> bool:
+    """Светлый ли запрошенный цвет иконки (по воспринимаемой яркости)."""
+    if not color:
         return False
-    g = etree.fromstring(item["xml"])
-    xfrm = g.find(_q("p:grpSpPr") + "/" + _q("a:xfrm"))
-    if xfrm is None:
+    s = str(color).lstrip("#")
+    if len(s) == 3:
+        s = "".join(c * 2 for c in s)
+    if len(s) != 6:
         return False
-    off = xfrm.find(_q("a:off"))
-    ext = xfrm.find(_q("a:ext"))
-    off.set("x", str(int(left)))
-    off.set("y", str(int(top)))
-    ext.set("cx", str(int(size)))
-    ext.set("cy", str(int(size * item.get("aspect", 1.0))))
-    _recolor(g, hex_color)
-    slide.shapes._spTree.append(g)
-    return True
+    r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0 > 0.5
 
 
-def draw_brand_icon(slide, hint: str, left, top, size, color: str) -> bool:
-    """Рисует иконку по смысловому хинту (warning, clock, signal...).
-
-    Возвращает True, если иконка найдена и вставлена; иначе False
-    (вызывающий код может откатиться на встроенные иконки icons.py).
-    """
-    key = _load().get("hints", {}).get((hint or "").lower().strip())
-    if not key:
+def draw_brand_icon(slide, hint, left, top, size, color) -> bool:
+    """Кладёт брендовую иконку по хинту. Вариант (тёмный/светлый) выбирается
+    по яркости запрошенного цвета: светлый цвет -> светлая иконка (для тёмных
+    карточек) и наоборот. Возвращает True, если иконка вставлена."""
+    base = _base(hint)
+    if not base:
+        return False
+    variant = "light" if _is_light(color) else "dark"
+    path = _ICON_DIR / f"icon_{base}_{variant}.png"
+    if not path.exists():
+        alt = _ICON_DIR / f"icon_{base}_{'dark' if variant == 'light' else 'light'}.png"
+        path = alt if alt.exists() else path
+    if not path.exists():
         return False
     try:
-        return stamp_icon(slide, key, left, top, size, color)
+        from pptx.util import Emu
+        slide.shapes.add_picture(str(path), Emu(int(left)), Emu(int(top)),
+                                 Emu(int(size)), Emu(int(size)))
+        return True
     except Exception:
         return False

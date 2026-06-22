@@ -66,6 +66,14 @@ class DigestStyle(BaseModel):
             "стиля, не моделью."
         ),
     )
+    background_cover: Optional[str] = Field(
+        default=None,
+        description="Имя файла-ассета фона обложки (например бренд-шаблон).",
+    )
+    background_content: Optional[str] = Field(
+        default=None,
+        description="Имя файла-ассета фона контентных слайдов.",
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -34,7 +34,7 @@ from .prompts import (
     data_only_user_prompt,
     system_prompt,
 )
-from .schemas import ColorPalette, DigestSpec, DigestStyle
+from .schemas import ColorPalette, DigestSpec, DigestStyle, Typography
 from .style_resolver import merge_palette, parse_style_directives
 from .themes import detect_theme, get_theme_by_name, resolve_palette
 
@@ -304,6 +304,16 @@ class GenerateDigestTool(BaseTool):
             typography=spec.style.typography,
             locked_roles=sorted(locked),
         )
+        # Брендовые типографика и фоновые картинки из пресета (если есть),
+        # например фирменный шаблон SberF1.
+        if preset is not None:
+            if getattr(preset, "heading_font", None):
+                new_style.typography = Typography(
+                    heading_font=preset.heading_font,
+                    body_font=preset.body_font or preset.heading_font,
+                )
+            new_style.background_cover = getattr(preset, "bg_cover", None)
+            new_style.background_content = getattr(preset, "bg_content", None)
         try:
             updated = spec.model_copy(update={"style": new_style})
         except Exception:

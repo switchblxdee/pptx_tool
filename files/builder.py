@@ -31,6 +31,7 @@ from pptx.util import Emu, Inches, Pt
 
 from . import contrast as C
 from .icons import draw_icon, has_icon
+from .brand_icons import draw_brand_icon, has_brand_icon
 from .safe import with_fallback
 from .schemas import (
     AttentionSlide,
@@ -83,6 +84,8 @@ class DigestBuilder:
         # Брендовые фоновые картинки (например шаблон SberF1)
         self.bg_cover = self._resolve_asset(getattr(spec.style, "background_cover", None))
         self.bg_content = self._resolve_asset(getattr(spec.style, "background_content", None))
+        # Брендовые иконки SberF1 включаем вместе с брендовым фоном
+        self.use_brand_icons = bool(self.bg_content or self.bg_cover)
         self.prs = Presentation()
         self.prs.slide_width = SLIDE_WIDTH
         self.prs.slide_height = SLIDE_HEIGHT
@@ -90,6 +93,44 @@ class DigestBuilder:
     def _locked(self, *roles: str) -> bool:
         """True, если любая из ролей зафиксирована пользователем."""
         return any(r in self.locked for r in roles)
+
+    # Авто-подбор иконки по тексту подписи KPI — чтобы значки появлялись
+    # даже если LLM не проставила icon_hint (актуально для GLM и подобных).
+    _AUTO_ICON = [
+        (("сигнал", "обращен", "упомин", "запрос"), "signal"),
+        (("безопас", "кибербез", "защит"), "security"),
+        (("риск", "инцидент", "угроз"), "warning"),
+        (("нов",), "bell"),
+        (("тем", "рост", "динамик", "актив", "увелич"), "growth"),
+        (("источник", "команд", "сотрудн", "польз", "людей"), "team"),
+        (("продукт", "инструмент", "сервис", "систем"), "tools"),
+        (("период", "срок", "недел", "время", "дата"), "clock"),
+        (("баг", "ошибк", "дефект", "сбой"), "bug"),
+        (("поиск", "релевант", "наход"), "search"),
+        (("деньг", "финанс", "затрат", "бюджет", "стоим"), "money"),
+        (("почт", "письм", "обратн"), "email"),
+    ]
+
+    def _auto_icon_hint(self, label: Optional[str]) -> Optional[str]:
+        if not label:
+            return "signal"
+        t = label.lower()
+        for keys, hint in self._AUTO_ICON:
+            if any(k in t for k in keys):
+                return hint
+        return "signal"  # нейтральный дефолт (гистограмма)
+
+    def _has_any_icon(self, hint: Optional[str]) -> bool:
+        if not hint:
+            return False
+        return (self.use_brand_icons and has_brand_icon(hint)) or has_icon(hint)
+
+    def _draw_icon(self, slide, hint, left, top, size, color) -> None:
+        """Рисует иконку: сначала брендовую (SberF1), иначе встроенную."""
+        if self.use_brand_icons and draw_brand_icon(slide, hint, left, top, size, color):
+            return
+        if has_icon(hint):
+            draw_icon(slide, hint, left, top, size, color)
 
     @staticmethod
     def _resolve_asset(name: Optional[str]) -> Optional[str]:
@@ -200,8 +241,23 @@ class DigestBuilder:
             self._render_closing(slide, self.spec.closing)
             self._render_meta_footer(slide, page_number=page, total=total)
 
+        self._finalize_unique_ids()
         self.prs.save(output_path)
         return output_path
+
+    def _finalize_unique_ids(self) -> None:
+        """Делает все id фигур уникальными внутри каждого слайда.
+
+        Иконки из шаблона и автогенерация python-pptx могут давать
+        повторяющиеся cNvPr@id. PowerPoint/LibreOffice это терпят, но
+        R7-Офис/OnlyOffice из-за дублей теряет/путает фигуры. Финальный
+        проход переназначает id последовательно — гарантия уникальности.
+        """
+        for slide in self.prs.slides:
+            nid = 1
+            for cnv in slide._element.iter(qn("p:cNvPr")):
+                nid += 1
+                cnv.set("id", str(nid))
 
     def _new_slide(self, cover: bool = False):
         """Создаёт пустой слайд с фоном.
@@ -1269,12 +1325,15 @@ class DigestBuilder:
                                     size_pt=value_size, bold=True)
             label_color = self._ink(card_bg, role="muted", size_pt=label_size)
 
-        # Иконка в правом верхнем углу (если задан icon_hint)
+        # Иконка в правом верхнем углу. Если LLM не задала icon_hint —
+        # подбираем брендовую иконку по тексту подписи (для SberF1).
         icon_hint = getattr(kpi, "icon_hint", None)
-        if icon_hint and has_icon(icon_hint):
+        if not icon_hint and self.use_brand_icons:
+            icon_hint = self._auto_icon_hint(getattr(kpi, "label", None))
+        if icon_hint and self._has_any_icon(icon_hint):
             icon_size = Inches(0.28)
             icon_color = value_color if card_bg else self.palette.accent
-            draw_icon(
+            self._draw_icon(
                 slide, icon_hint,
                 left=left + width - icon_size - Inches(0.18),
                 top=top + Inches(0.16),
